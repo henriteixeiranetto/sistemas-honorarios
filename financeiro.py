@@ -20,18 +20,13 @@ st.markdown("""
         button[kind="primary"] { width: 100%; height: 3em; font-weight: bold; }
         .observacao-box { background-color: #fff3cd; padding: 10px; border-radius: 5px; border-left: 5px solid #ffca2c; margin-bottom: 20px; }
         .info-cliente { background-color: #f0f2f6; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #007bff; }
+        .secao-form { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 10px; }
     </style>
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 2. CONEXÃO COM SQL (PostgreSQL)
+# 2. CONEXÃO COM SUPABASE (PostgreSQL)
 # =============================================================================
-# Configure em Streamlit Cloud → Settings → Secrets:
-#
-#   [credenciais]
-#   usuario = "seu_usuario"
-#   senha   = "sua_senha"
-
 def criar_conexao():
     return psycopg2.connect(
         host            = st.secrets["supabase"]["host"],
@@ -58,7 +53,6 @@ def _conn():
     return cache["conn"]
 
 def exec_db(query, params=()):
-    """INSERT / UPDATE / DELETE / DDL."""
     conn = _conn()
     try:
         with conn.cursor() as cur:
@@ -69,7 +63,6 @@ def exec_db(query, params=()):
         st.error(f"Erro no banco: {e}")
 
 def exec_retorna(query, params=()):
-    """INSERT com RETURNING — retorna o valor gerado."""
     conn = _conn()
     try:
         with conn.cursor() as cur:
@@ -83,7 +76,6 @@ def exec_retorna(query, params=()):
         return None
 
 def select_db(query, params=()):
-    """SELECT — retorna DataFrame."""
     conn = _conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -100,23 +92,73 @@ def select_db(query, params=()):
 
 # =============================================================================
 # 3. BANCO DE DADOS — INICIALIZAÇÃO
-# Usamos if/session_state para evitar que a chamada fique exposta como
-# expressão no nível do módulo (o que causaria o "None" do magic mode).
 # =============================================================================
 def inicializar_banco():
+    # Tabela principal de contratos
     exec_db("""
         CREATE TABLE IF NOT EXISTS contratos (
-            id            SERIAL PRIMARY KEY,
-            cliente       TEXT NOT NULL,
-            cpf_cnpj      TEXT,
-            telefone      TEXT,
-            valor_total   REAL NOT NULL,
-            saldo_devedor REAL NOT NULL,
-            data_contrato TEXT NOT NULL,
-            tutela        TEXT,
-            observacoes   TEXT
+            id                      SERIAL PRIMARY KEY,
+            cliente                 TEXT NOT NULL,
+            cpf_cnpj                TEXT,
+            telefone                TEXT,
+            valor_total             REAL NOT NULL,
+            saldo_devedor           REAL NOT NULL,
+            data_contrato           TEXT NOT NULL,
+            observacoes             TEXT,
+
+            -- Honorários Iniciais
+            hon_inicial_ativo       TEXT,
+            hon_inicial_valor       REAL,
+            hon_inicial_parcelado   TEXT,
+            hon_inicial_parcelas    INTEGER,
+            hon_inicial_vlr_parcela REAL,
+
+            -- Honorários da Liminar
+            hon_liminar_fixo        REAL,
+            hon_liminar_reducao_vlr REAL,
+            hon_liminar_reducao_prc INTEGER,
+            tutela                  TEXT,
+
+            -- Honorários de Êxito
+            hon_exito_percentual    REAL,
+            hon_exito_fixo          REAL,
+
+            -- Dados do Processo
+            nr_processo             TEXT,
+            nr_vara                 TEXT,
+            nome_juiz               TEXT,
+            comarca                 TEXT
         )
     """)
+
+    # Adiciona colunas novas em tabelas que já existem no Supabase
+    # (sem erro se já existirem)
+    novas_colunas = [
+        ("hon_inicial_ativo",       "TEXT"),
+        ("hon_inicial_valor",       "REAL"),
+        ("hon_inicial_parcelado",   "TEXT"),
+        ("hon_inicial_parcelas",    "INTEGER"),
+        ("hon_inicial_vlr_parcela", "REAL"),
+        ("hon_liminar_fixo",        "REAL"),
+        ("hon_liminar_reducao_vlr", "REAL"),
+        ("hon_liminar_reducao_prc", "INTEGER"),
+        ("hon_exito_percentual",    "REAL"),
+        ("hon_exito_fixo",          "REAL"),
+        ("nr_processo",             "TEXT"),
+        ("nr_vara",                 "TEXT"),
+        ("nome_juiz",               "TEXT"),
+        ("comarca",                 "TEXT"),
+    ]
+    conn = _conn()
+    for col, tipo in novas_colunas:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"ALTER TABLE contratos ADD COLUMN IF NOT EXISTS {col} {tipo}")
+                conn.commit()
+        except Exception:
+            conn.rollback()
+
+    # Tabela de parcelas
     exec_db("""
         CREATE TABLE IF NOT EXISTS parcelas (
             id              SERIAL PRIMARY KEY,
@@ -131,7 +173,6 @@ def inicializar_banco():
         )
     """)
 
-# if é um STATEMENT — o magic mode não age sobre ele, então não exibe None
 if 'banco_ok' not in st.session_state:
     inicializar_banco()
     st.session_state['banco_ok'] = True
@@ -362,54 +403,149 @@ if aba == "📊 Dashboard":
 # --- NOVO CONTRATO ---
 elif aba == "➕ Novo Contrato":
     st.header("Cadastrar Novo Contrato")
+
+    # ------------------------------------------------------------------
+    # INFORMAÇÕES BÁSICAS
+    # ------------------------------------------------------------------
+    st.subheader("📋 Informações Básicas")
     col1, col2 = st.columns(2)
     nome    = col1.text_input("Nome do Cliente")
     cpf_raw = col2.text_input("CPF ou CNPJ (Somente números)", placeholder="Ex: 00000000000")
     tel_raw = col1.text_input("Telefone (Somente números)", placeholder="Ex: 11999998888")
     data_c  = col2.date_input("Data do Contrato", value=date.today())
-    valor   = col1.number_input("Valor Total (R$)", min_value=0.0, step=100.0, format="%.2f")
-    tutela  = col2.selectbox("Status da Tutela", ["Pendente","Deferida","Indeferida","Parcial"])
-    obs     = st.text_area("Observações (Nº do Processo, Vara, etc.)")
 
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # HONORÁRIOS INICIAIS
+    # ------------------------------------------------------------------
+    st.subheader("💰 Honorários Iniciais")
+    col1, col2 = st.columns(2)
+    hon_ini_ativo     = col1.selectbox("Há cobrança inicial?", ["Não", "Sim"], key="hon_ini_ativo")
+    hon_ini_valor     = col2.number_input("Valor Total (R$)", min_value=0.0, step=100.0,
+                                          format="%.2f", key="hon_ini_valor")
+    hon_ini_parcelado = col1.selectbox("Pagamento parcelado?", ["Não", "Sim"], key="hon_ini_parc")
+    hon_ini_parcelas  = 1
+    hon_ini_vlr_parc  = 0.0
+
+    if hon_ini_parcelado == "Sim" and hon_ini_valor > 0:
+        col3, col4 = st.columns(2)
+        hon_ini_parcelas = col3.number_input("Quantidade de Parcelas", min_value=1,
+                                              max_value=60, value=1, step=1, key="hon_ini_qtd")
+        hon_ini_vlr_parc = round(hon_ini_valor / hon_ini_parcelas, 2) if hon_ini_parcelas > 0 else 0.0
+        col4.metric("Valor de Cada Parcela", f"R$ {hon_ini_vlr_parc:,.2f}")
+
+    # Valor total usado no restante do sistema = honorários iniciais
+    valor = hon_ini_valor
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # HONORÁRIOS DA LIMINAR
+    # ------------------------------------------------------------------
+    st.subheader("⚖️ Honorários da Liminar")
+    col1, col2 = st.columns(2)
+    tutela             = col1.selectbox("Status da Tutela",
+                                        ["Pendente", "Deferido", "Indeferido", "Parcial"])
+    hon_lim_fixo       = col2.number_input("Honorários Fixos da Liminar (R$)",
+                                            min_value=0.0, step=100.0, format="%.2f", key="hon_lim_fixo")
+    col3, col4 = st.columns(2)
+    hon_lim_red_vlr    = col3.number_input("Valor Efetivo da Redução Obtida (R$)",
+                                            min_value=0.0, step=100.0, format="%.2f", key="hon_lim_red_vlr")
+    hon_lim_red_prc    = col4.number_input("Nº de Parcelas da Redução",
+                                            min_value=0, max_value=360, value=0, step=1, key="hon_lim_red_prc")
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # HONORÁRIOS DE ÊXITO
+    # ------------------------------------------------------------------
+    st.subheader("🏆 Honorários de Êxito")
+    col1, col2 = st.columns(2)
+    hon_exito_pct  = col1.number_input("Percentual de Êxito (%)", min_value=0.0,
+                                        max_value=100.0, step=0.5, format="%.2f", key="hon_ex_pct")
+    hon_exito_fixo = col2.number_input("Valor Fixo de Êxito (R$)", min_value=0.0,
+                                        step=100.0, format="%.2f", key="hon_ex_fixo")
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # DADOS DO PROCESSO
+    # ------------------------------------------------------------------
+    st.subheader("📁 Dados do Processo")
+    col1, col2 = st.columns(2)
+    nr_processo = col1.text_input("Número do Processo", placeholder="Ex: 0000000-00.0000.0.00.0000")
+    nr_vara     = col2.text_input("Número da Vara", placeholder="Ex: 3ª Vara Cível")
+    col3, col4 = st.columns(2)
+    nome_juiz   = col3.text_input("Nome do Juiz")
+    comarca     = col4.text_input("Comarca")
+    obs         = st.text_area("Observações (anotações extras)")
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # PARCELAMENTO DOS HONORÁRIOS INICIAIS (para controle de pagamentos)
+    # ------------------------------------------------------------------
     if valor > 0:
+        st.subheader("📅 Parcelamento para Controle de Pagamentos")
         opcoes  = ([f"À vista: R$ {valor:,.2f}"] +
                    [f"R$ {valor:,.2f} ou {i}x de R$ {valor/i:,.2f} sem juros" for i in range(2, 11)])
-        selecao = st.selectbox("Parcelamento:", opcoes)
+        selecao = st.selectbox("Como deseja controlar as parcelas no sistema?", opcoes)
         n_p     = 1 if "À vista" in selecao else int(selecao.split(" ou ")[1].split("x")[0])
 
-        if st.button("Salvar Contrato", type="primary"):
-            doc_limpo = re.sub(r'\D', '', cpf_raw)
-            if not nome:
-                st.error("Nome obrigatório.")
-            elif len(doc_limpo) == 11 and not validar_cpf(doc_limpo):
-                st.error("CPF inválido! Por favor, insira um documento real.")
-            elif len(doc_limpo) == 14 and not validar_cnpj(doc_limpo):
-                st.error("CNPJ inválido! Por favor, insira um documento real.")
-            elif len(doc_limpo) not in [11, 14]:
-                st.error("O documento deve ter 11 dígitos (CPF) ou 14 dígitos (CNPJ).")
-            else:
-                cpf_fmt = formatar_cpf_cnpj(doc_limpo)
-                tel_fmt = formatar_telefone(tel_raw)
-                obs_val = obs.strip() or None
-                c_id = exec_retorna(
-                    """INSERT INTO contratos
-                       (cliente, cpf_cnpj, telefone, valor_total, saldo_devedor,
-                        data_contrato, tutela, observacoes)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                    (nome, cpf_fmt, tel_fmt, valor, valor,
-                     data_c.strftime("%Y-%m-%d"), tutela, obs_val)
-                )
-                v_base = round(valor / n_p, 2)
-                for i in range(1, n_p + 1):
-                    v_f  = round(valor - (v_base * (n_p - 1)), 2) if i == n_p else v_base
+    if st.button("Salvar Contrato", type="primary"):
+        doc_limpo = re.sub(r'\D', '', cpf_raw)
+        if not nome:
+            st.error("Nome obrigatório.")
+        elif len(doc_limpo) == 11 and not validar_cpf(doc_limpo):
+            st.error("CPF inválido! Por favor, insira um documento real.")
+        elif len(doc_limpo) == 14 and not validar_cnpj(doc_limpo):
+            st.error("CNPJ inválido! Por favor, insira um documento real.")
+        elif len(doc_limpo) not in [11, 14]:
+            st.error("O documento deve ter 11 dígitos (CPF) ou 14 dígitos (CNPJ).")
+        else:
+            cpf_fmt   = formatar_cpf_cnpj(doc_limpo)
+            tel_fmt   = formatar_telefone(tel_raw)
+            obs_val   = obs.strip() or None
+            valor_sal = valor if valor > 0 else 0.0
+            n_p_sal   = n_p if valor > 0 else 1
+
+            c_id = exec_retorna(
+                """INSERT INTO contratos
+                   (cliente, cpf_cnpj, telefone, valor_total, saldo_devedor, data_contrato,
+                    observacoes, tutela,
+                    hon_inicial_ativo, hon_inicial_valor, hon_inicial_parcelado,
+                    hon_inicial_parcelas, hon_inicial_vlr_parcela,
+                    hon_liminar_fixo, hon_liminar_reducao_vlr, hon_liminar_reducao_prc,
+                    hon_exito_percentual, hon_exito_fixo,
+                    nr_processo, nr_vara, nome_juiz, comarca)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   RETURNING id""",
+                (nome, cpf_fmt, tel_fmt, valor_sal, valor_sal,
+                 data_c.strftime("%Y-%m-%d"), obs_val, tutela,
+                 hon_ini_ativo, hon_ini_valor if hon_ini_ativo == "Sim" else None,
+                 hon_ini_parcelado,
+                 hon_ini_parcelas if hon_ini_parcelado == "Sim" else None,
+                 hon_ini_vlr_parc if hon_ini_parcelado == "Sim" else None,
+                 hon_lim_fixo or None, hon_lim_red_vlr or None, hon_lim_red_prc or None,
+                 hon_exito_pct or None, hon_exito_fixo or None,
+                 nr_processo.strip() or None, nr_vara.strip() or None,
+                 nome_juiz.strip() or None, comarca.strip() or None)
+            )
+
+            if valor_sal > 0:
+                v_base = round(valor_sal / n_p_sal, 2)
+                for i in range(1, n_p_sal + 1):
+                    v_f  = round(valor_sal - (v_base * (n_p_sal - 1)), 2) if i == n_p_sal else v_base
                     venc = data_c + pd.DateOffset(months=i - 1)
                     exec_db(
                         "INSERT INTO parcelas (contrato_id, nr_parcela, valor_parcela, data_vencimento) VALUES (%s,%s,%s,%s)",
                         (c_id, i, v_f, venc.strftime("%Y-%m-%d"))
                     )
-                st.success("Contrato cadastrado com sucesso!")
-                time.sleep(1)
-                st.rerun()
+
+            st.success("Contrato cadastrado com sucesso!")
+            time.sleep(1)
+            st.rerun()
 
 # --- PAGAMENTOS ---
 elif aba == "💰 Pagamentos":
@@ -458,6 +594,15 @@ elif aba == "💰 Pagamentos":
                 📞 Tel: {formatar_telefone(resumo['telefone'])}
             </div>
         """, unsafe_allow_html=True)
+
+        # Dados do processo se disponíveis
+        infos_proc = []
+        if not nulo(resumo.get('nr_processo',  '')): infos_proc.append(f"📄 Processo: {resumo['nr_processo']}")
+        if not nulo(resumo.get('nr_vara',       '')): infos_proc.append(f"🏛️ Vara: {resumo['nr_vara']}")
+        if not nulo(resumo.get('nome_juiz',     '')): infos_proc.append(f"👨‍⚖️ Juiz: {resumo['nome_juiz']}")
+        if not nulo(resumo.get('comarca',       '')): infos_proc.append(f"📍 Comarca: {resumo['comarca']}")
+        if infos_proc:
+            st.markdown(" &nbsp;|&nbsp; ".join(infos_proc))
 
         vt = float(resumo['valor_total'])
         sd = float(resumo['saldo_devedor'])
@@ -585,5 +730,3 @@ elif aba == "⚙️ Gestão":
             st.rerun()
     else:
         st.info("Nenhum contrato cadastrado.")
-
-
