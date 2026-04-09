@@ -8,12 +8,12 @@ import io
 import urllib.parse
 import re
 from fpdf import FPDF
-
+ 
 # =============================================================================
 # 1. CONFIGURAÇÕES E ESTILO
 # =============================================================================
-st.set_page_config(page_title="Gestão de Honorários PRO", layout="wide", page_icon="⚖️")
-
+st.set_page_config(page_title="Sistema de Honorários", layout="wide", page_icon="⚖️")
+ 
 st.markdown("""
     <style>
         .stMetric { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; }
@@ -23,27 +23,35 @@ st.markdown("""
         .secao-form { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 10px; }
     </style>
 """, unsafe_allow_html=True)
-
+ 
 # =============================================================================
 # 2. CONEXÃO COM SUPABASE (PostgreSQL)
 # =============================================================================
 def criar_conexao():
+    import os
+    # Railway: variáveis de ambiente
+    # Streamlit Cloud: st.secrets
+    host     = os.environ.get("SUPABASE_HOST")     or st.secrets["supabase"]["host"]
+    port     = os.environ.get("SUPABASE_PORT")     or st.secrets["supabase"]["port"]
+    dbname   = os.environ.get("SUPABASE_DBNAME")   or st.secrets["supabase"]["dbname"]
+    user     = os.environ.get("SUPABASE_USER")     or st.secrets["supabase"]["user"]
+    password = os.environ.get("SUPABASE_PASSWORD") or st.secrets["supabase"]["password"]
     return psycopg2.connect(
-        host            = st.secrets["supabase"]["host"],
-        port            = st.secrets["supabase"]["port"],
-        dbname          = st.secrets["supabase"]["dbname"],
-        user            = st.secrets["supabase"]["user"],
-        password        = st.secrets["supabase"]["password"],
+        host            = host,
+        port            = port,
+        dbname          = dbname,
+        user            = user,
+        password        = password,
         sslmode         = "require",
         connect_timeout = 10,
         keepalives      = 1,
         keepalives_idle = 30,
     )
-
+ 
 @st.cache_resource(show_spinner=False)
 def get_conn():
     return {"conn": criar_conexao()}
-
+ 
 def _conn():
     cache = get_conn()
     try:
@@ -51,7 +59,7 @@ def _conn():
     except Exception:
         cache["conn"] = criar_conexao()
     return cache["conn"]
-
+ 
 def exec_db(query, params=()):
     conn = _conn()
     try:
@@ -61,7 +69,7 @@ def exec_db(query, params=()):
     except Exception as e:
         conn.rollback()
         st.error(f"Erro no banco: {e}")
-
+ 
 def exec_retorna(query, params=()):
     conn = _conn()
     try:
@@ -74,7 +82,7 @@ def exec_retorna(query, params=()):
         conn.rollback()
         st.error(f"Erro no banco: {e}")
         return None
-
+ 
 def select_db(query, params=()):
     conn = _conn()
     try:
@@ -89,7 +97,7 @@ def select_db(query, params=()):
         conn.rollback()
         st.error(f"Erro no banco: {e}")
         return pd.DataFrame()
-
+ 
 # =============================================================================
 # 3. BANCO DE DADOS — INICIALIZAÇÃO
 # =============================================================================
@@ -105,24 +113,24 @@ def inicializar_banco():
             saldo_devedor           REAL NOT NULL,
             data_contrato           TEXT NOT NULL,
             observacoes             TEXT,
-
+ 
             -- Honorários Iniciais
             hon_inicial_ativo       TEXT,
             hon_inicial_valor       REAL,
             hon_inicial_parcelado   TEXT,
             hon_inicial_parcelas    INTEGER,
             hon_inicial_vlr_parcela REAL,
-
+ 
             -- Honorários da Liminar
             hon_liminar_fixo        REAL,
             hon_liminar_reducao_vlr REAL,
             hon_liminar_reducao_prc INTEGER,
             tutela                  TEXT,
-
+ 
             -- Honorários de Êxito
             hon_exito_percentual    REAL,
             hon_exito_fixo          REAL,
-
+ 
             -- Dados do Processo
             nr_processo             TEXT,
             nr_vara                 TEXT,
@@ -130,7 +138,7 @@ def inicializar_banco():
             comarca                 TEXT
         )
     """)
-
+ 
     # Adiciona colunas novas em tabelas que já existem no Supabase
     # (sem erro se já existirem)
     novas_colunas = [
@@ -157,7 +165,7 @@ def inicializar_banco():
                 conn.commit()
         except Exception:
             conn.rollback()
-
+ 
     # Tabela de parcelas
     exec_db("""
         CREATE TABLE IF NOT EXISTS parcelas (
@@ -172,11 +180,11 @@ def inicializar_banco():
             forma_pagamento TEXT
         )
     """)
-
+ 
 if 'banco_ok' not in st.session_state:
     inicializar_banco()
     st.session_state['banco_ok'] = True
-
+ 
 # =============================================================================
 # 4. FUNÇÕES DE VALIDAÇÃO, FORMATAÇÃO E EXPORTAÇÃO
 # =============================================================================
@@ -187,7 +195,7 @@ def validar_cpf(cpf):
         soma = sum(int(cpf[num]) * ((i + 1) - num) for num in range(0, i))
         if (soma * 10 % 11) % 10 != int(cpf[i]): return False
     return True
-
+ 
 def validar_cnpj(cnpj):
     cnpj = re.sub(r'\D', '', str(cnpj))
     if len(cnpj) != 14 or len(set(cnpj)) == 1: return False
@@ -196,24 +204,24 @@ def validar_cnpj(cnpj):
         soma  = sum(int(cnpj[i]) * pesos[i] for i in range(n)) % 11
         return 0 if soma < 2 else 11 - soma
     return calcular_digito(12) == int(cnpj[12]) and calcular_digito(13) == int(cnpj[13])
-
+ 
 def nulo(v):
     return not v or str(v).strip() in ("", "None", "nan", "NaT")
-
+ 
 def formatar_cpf_cnpj(valor):
     if nulo(valor): return "-"
     num = re.sub(r'\D', '', str(valor))
     if len(num) == 11: return f"{num[:3]}.{num[3:6]}.{num[6:9]}-{num[9:]}"
     if len(num) == 14: return f"{num[:2]}.{num[2:5]}.{num[5:8]}/{num[8:12]}-{num[12:]}"
     return str(valor)
-
+ 
 def formatar_telefone(valor):
     if nulo(valor): return "-"
     num = re.sub(r'\D', '', str(valor))
     if len(num) == 11: return f"({num[:2]}) {num[2:7]}-{num[7:]}"
     if len(num) == 10: return f"({num[:2]}) {num[2:6]}-{num[6:]}"
     return str(valor)
-
+ 
 def formatar_data(data):
     if nulo(data): return "-"
     try:
@@ -223,7 +231,7 @@ def formatar_data(data):
         return datetime.strptime(s[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
     except:
         return "-"
-
+ 
 def obter_status_parcela(pago, data_vencimento):
     if int(pago) == 1: return "🟢 Pago"
     try:
@@ -233,13 +241,13 @@ def obter_status_parcela(pago, data_vencimento):
     except:
         pass
     return "🟡 Pendente"
-
+ 
 def gerar_excel(df):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Relatorio')
     return buffer.getvalue()
-
+ 
 def gerar_pdf(df, titulo):
     pdf = FPDF(orientation="L")
     pdf.set_auto_page_break(auto=True, margin=12)
@@ -277,13 +285,13 @@ def gerar_pdf(df, titulo):
         pdf.ln()
         fill = not fill
     return bytes(pdf.output())
-
+ 
 # =============================================================================
 # 5. LOGIN E NAVEGAÇÃO
 # =============================================================================
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
-
+ 
 if not st.session_state['autenticado']:
     col_l, col_c, col_r = st.columns([1, 2, 1])
     with col_c:
@@ -291,38 +299,41 @@ if not st.session_state['autenticado']:
         u = st.text_input("Usuário")
         s = st.text_input("Senha", type="password")
         if st.button("Entrar", type="primary"):
-            if u == st.secrets["credenciais"]["usuario"] and s == st.secrets["credenciais"]["senha"]:
+            import os
+            cred_usuario = os.environ.get("CRED_USUARIO") or st.secrets["credenciais"]["usuario"]
+            cred_senha   = os.environ.get("CRED_SENHA")   or st.secrets["credenciais"]["senha"]
+            if u == cred_usuario and s == cred_senha:
                 st.session_state['autenticado'] = True
                 st.rerun()
             else:
                 st.error("Credenciais inválidas")
     st.stop()
-
+ 
 opcoes_menu = ["📊 Dashboard", "➕ Novo Contrato", "💰 Pagamentos", "📁 Arquivados", "⚙️ Gestão"]
 if 'rad_nav' not in st.session_state:
     st.session_state['rad_nav'] = "📊 Dashboard"
 aba = st.sidebar.radio("Navegação", opcoes_menu, key="rad_nav")
-
+ 
 # =============================================================================
 # 6. INTERFACE PRINCIPAL
 # =============================================================================
-
+ 
 # --- DASHBOARD ---
 if aba == "📊 Dashboard":
     st.header("Resumo Financeiro")
     df_c = select_db("SELECT * FROM contratos ORDER BY cliente ASC")
-
+ 
     if not df_c.empty:
         df_c['valor_total']   = pd.to_numeric(df_c['valor_total'],   errors='coerce').fillna(0)
         df_c['saldo_devedor'] = pd.to_numeric(df_c['saldo_devedor'], errors='coerce').fillna(0)
         df_ativos = df_c[df_c['saldo_devedor'] > 0].copy()
-
+ 
         m1, m2, m3 = st.columns(3)
         m1.metric("Contratado Geral",    f"R$ {df_c['valor_total'].sum():,.2f}")
         m2.metric("Saldo Devedor Total", f"R$ {df_c['saldo_devedor'].sum():,.2f}")
         m3.metric("Contratos Ativos",    len(df_ativos))
         st.divider()
-
+ 
         df_alertas = select_db("""
             SELECT c.cliente, c.telefone, c.saldo_devedor,
                    p.nr_parcela, p.valor_parcela, p.data_vencimento
@@ -354,7 +365,7 @@ if aba == "📊 Dashboard":
                                  "Valor Atrasado":      st.column_config.NumberColumn(format="R$ %.2f"),
                              })
                 st.divider()
-
+ 
         if not df_ativos.empty:
             col_t, col_a = st.columns([2, 1])
             col_t.subheader("Contratos Ativos (Em Aberto)")
@@ -369,7 +380,7 @@ if aba == "📊 Dashboard":
                     st.session_state['cliente_foco'] = cliente_map_dash[cliente_selecionado]
                     st.session_state['rad_nav'] = "💰 Pagamentos"
                 st.button("Ir para Pagamento ➡", type="primary", on_click=ir_para_pagamentos)
-
+ 
             df_ativos['data_contrato'] = df_ativos['data_contrato'].apply(formatar_data)
             df_ativos['cpf_cnpj']      = df_ativos['cpf_cnpj'].apply(formatar_cpf_cnpj)
             df_ativos['telefone']      = df_ativos['telefone'].apply(formatar_telefone)
@@ -399,11 +410,11 @@ if aba == "📊 Dashboard":
             st.success("Todos os clientes estão com as contas em dia!")
     else:
         st.info("Nenhum contrato registrado.")
-
+ 
 # --- NOVO CONTRATO ---
 elif aba == "➕ Novo Contrato":
     st.header("Cadastrar Novo Contrato")
-
+ 
     # ------------------------------------------------------------------
     # INFORMAÇÕES BÁSICAS
     # ------------------------------------------------------------------
@@ -413,9 +424,9 @@ elif aba == "➕ Novo Contrato":
     cpf_raw = col2.text_input("CPF ou CNPJ (Somente números)", placeholder="Ex: 00000000000")
     tel_raw = col1.text_input("Telefone (Somente números)", placeholder="Ex: 11999998888")
     data_c  = col2.date_input("Data do Contrato", value=date.today())
-
+ 
     st.divider()
-
+ 
     # ------------------------------------------------------------------
     # HONORÁRIOS INICIAIS
     # ------------------------------------------------------------------
@@ -427,19 +438,19 @@ elif aba == "➕ Novo Contrato":
     hon_ini_parcelado = col1.selectbox("Pagamento parcelado?", ["Não", "Sim"], key="hon_ini_parc")
     hon_ini_parcelas  = 1
     hon_ini_vlr_parc  = 0.0
-
+ 
     if hon_ini_parcelado == "Sim" and hon_ini_valor > 0:
         col3, col4 = st.columns(2)
         hon_ini_parcelas = col3.number_input("Quantidade de Parcelas", min_value=1,
                                               max_value=60, value=1, step=1, key="hon_ini_qtd")
         hon_ini_vlr_parc = round(hon_ini_valor / hon_ini_parcelas, 2) if hon_ini_parcelas > 0 else 0.0
         col4.metric("Valor de Cada Parcela", f"R$ {hon_ini_vlr_parc:,.2f}")
-
+ 
     # Valor total usado no restante do sistema = honorários iniciais
     valor = hon_ini_valor
-
+ 
     st.divider()
-
+ 
     # ------------------------------------------------------------------
     # HONORÁRIOS DA LIMINAR
     # ------------------------------------------------------------------
@@ -454,9 +465,9 @@ elif aba == "➕ Novo Contrato":
                                             min_value=0.0, step=100.0, format="%.2f", key="hon_lim_red_vlr")
     hon_lim_red_prc    = col4.number_input("Nº de Parcelas da Redução",
                                             min_value=0, max_value=360, value=0, step=1, key="hon_lim_red_prc")
-
+ 
     st.divider()
-
+ 
     # ------------------------------------------------------------------
     # HONORÁRIOS DE ÊXITO
     # ------------------------------------------------------------------
@@ -466,9 +477,9 @@ elif aba == "➕ Novo Contrato":
                                         max_value=100.0, step=0.5, format="%.2f", key="hon_ex_pct")
     hon_exito_fixo = col2.number_input("Valor Fixo de Êxito (R$)", min_value=0.0,
                                         step=100.0, format="%.2f", key="hon_ex_fixo")
-
+ 
     st.divider()
-
+ 
     # ------------------------------------------------------------------
     # DADOS DO PROCESSO
     # ------------------------------------------------------------------
@@ -480,9 +491,9 @@ elif aba == "➕ Novo Contrato":
     nome_juiz   = col3.text_input("Nome do Juiz")
     comarca     = col4.text_input("Comarca")
     obs         = st.text_area("Observações (anotações extras)")
-
+ 
     st.divider()
-
+ 
     # ------------------------------------------------------------------
     # PARCELAMENTO DOS HONORÁRIOS INICIAIS (para controle de pagamentos)
     # ------------------------------------------------------------------
@@ -492,7 +503,7 @@ elif aba == "➕ Novo Contrato":
                    [f"R$ {valor:,.2f} ou {i}x de R$ {valor/i:,.2f} sem juros" for i in range(2, 11)])
         selecao = st.selectbox("Como deseja controlar as parcelas no sistema?", opcoes)
         n_p     = 1 if "À vista" in selecao else int(selecao.split(" ou ")[1].split("x")[0])
-
+ 
     if st.button("Salvar Contrato", type="primary"):
         doc_limpo = re.sub(r'\D', '', cpf_raw)
         if not nome:
@@ -509,7 +520,7 @@ elif aba == "➕ Novo Contrato":
             obs_val   = obs.strip() or None
             valor_sal = valor if valor > 0 else 0.0
             n_p_sal   = n_p if valor > 0 else 1
-
+ 
             c_id = exec_retorna(
                 """INSERT INTO contratos
                    (cliente, cpf_cnpj, telefone, valor_total, saldo_devedor, data_contrato,
@@ -532,7 +543,7 @@ elif aba == "➕ Novo Contrato":
                  nr_processo.strip() or None, nr_vara.strip() or None,
                  nome_juiz.strip() or None, comarca.strip() or None)
             )
-
+ 
             if valor_sal > 0:
                 v_base = round(valor_sal / n_p_sal, 2)
                 for i in range(1, n_p_sal + 1):
@@ -542,15 +553,15 @@ elif aba == "➕ Novo Contrato":
                         "INSERT INTO parcelas (contrato_id, nr_parcela, valor_parcela, data_vencimento) VALUES (%s,%s,%s,%s)",
                         (c_id, i, v_f, venc.strftime("%Y-%m-%d"))
                     )
-
+ 
             st.success("Contrato cadastrado com sucesso!")
             time.sleep(1)
             st.rerun()
-
+ 
 # --- PAGAMENTOS ---
 elif aba == "💰 Pagamentos":
     st.header("Registrar Recebimento")
-
+ 
     if 'ultimo_recibo' in st.session_state:
         with st.container(border=True):
             st.subheader("📄 Recibo Gerado")
@@ -564,29 +575,29 @@ elif aba == "💰 Pagamentos":
                 del st.session_state['tel_cliente']
                 st.rerun()
         st.divider()
-
+ 
     df_contratos = select_db("SELECT * FROM contratos WHERE saldo_devedor > 0 ORDER BY cliente ASC")
     if df_contratos.empty:
         st.info("Não há contratos pendentes.")
     else:
         df_contratos['valor_total']   = pd.to_numeric(df_contratos['valor_total'],   errors='coerce').fillna(0)
         df_contratos['saldo_devedor'] = pd.to_numeric(df_contratos['saldo_devedor'], errors='coerce').fillna(0)
-
+ 
         cliente_map     = {f"{r['cliente']} (Contrato #{r['id']})": r['id']
                            for _, r in df_contratos.iterrows()}
         opcoes_dropdown = list(cliente_map.keys())
-
+ 
         if 'cliente_foco' in st.session_state:
             foco_id = st.session_state.pop('cliente_foco')
             for k in opcoes_dropdown:
                 if cliente_map[k] == foco_id:
                     st.session_state['select_cliente'] = k
                     break
-
+ 
         nome_sel = st.selectbox("Selecione o Cliente", options=opcoes_dropdown, key='select_cliente')
         id_sel   = cliente_map[nome_sel]
         resumo   = df_contratos[df_contratos['id'] == id_sel].iloc[0]
-
+ 
         st.markdown(f"""
             <div class='info-cliente'>
                 <b>Dados do Cliente:</b><br>
@@ -594,7 +605,7 @@ elif aba == "💰 Pagamentos":
                 📞 Tel: {formatar_telefone(resumo['telefone'])}
             </div>
         """, unsafe_allow_html=True)
-
+ 
         # Dados do processo se disponíveis
         infos_proc = []
         if not nulo(resumo.get('nr_processo',  '')): infos_proc.append(f"📄 Processo: {resumo['nr_processo']}")
@@ -603,7 +614,7 @@ elif aba == "💰 Pagamentos":
         if not nulo(resumo.get('comarca',       '')): infos_proc.append(f"📍 Comarca: {resumo['comarca']}")
         if infos_proc:
             st.markdown(" &nbsp;|&nbsp; ".join(infos_proc))
-
+ 
         vt = float(resumo['valor_total'])
         sd = float(resumo['saldo_devedor'])
         col_r1, col_r2 = st.columns(2)
@@ -611,24 +622,24 @@ elif aba == "💰 Pagamentos":
         col_r2.metric("Saldo Restante", f"R$ {sd:,.2f}")
         pct = float(max(0.0, min(1.0, (vt - sd) / vt))) if vt > 0 else 0.0
         st.progress(pct, text=f"Progresso de Pagamento: {pct:.1%}")
-
+ 
         if not nulo(resumo['observacoes']):
             st.markdown(f"<div class='observacao-box'><b>Notas:</b> {resumo['observacoes']}</div>",
                         unsafe_allow_html=True)
-
+ 
         df_parc = select_db(
             "SELECT * FROM parcelas WHERE contrato_id = %s ORDER BY nr_parcela", (int(id_sel),))
         if not df_parc.empty:
             df_parc['pago']          = pd.to_numeric(df_parc['pago'], errors='coerce').fillna(0).astype(int)
             df_parc['valor_parcela'] = pd.to_numeric(df_parc['valor_parcela'], errors='coerce')
-
+ 
             df_view                    = df_parc.copy()
             df_view['Status']          = df_view.apply(
                 lambda r: obter_status_parcela(r['pago'], r['data_vencimento']), axis=1)
             df_view['Vencimento']      = df_view['data_vencimento'].apply(formatar_data)
             df_view['forma_pagamento'] = df_view['forma_pagamento'].apply(
                 lambda x: "-" if nulo(x) else str(x))
-
+ 
             st.dataframe(df_view, use_container_width=True, hide_index=True,
                          column_order=['nr_parcela','valor_parcela','Vencimento','Status','forma_pagamento'],
                          column_config={
@@ -636,7 +647,7 @@ elif aba == "💰 Pagamentos":
                              "nr_parcela":      "Parcela",
                              "forma_pagamento": "Método",
                          })
-
+ 
             pendentes = df_parc[df_parc['pago'] == 0]
             if not pendentes.empty:
                 col_p, col_v = st.columns(2)
@@ -649,7 +660,7 @@ elif aba == "💰 Pagamentos":
                     format="%.2f")
                 forma_p = st.selectbox("Método de Recebimento",
                                        ["Pix","Dinheiro","Transferência","Cartão","Boleto"])
-
+ 
                 if st.button("Confirmar Pagamento", type="primary"):
                     novo_saldo = round(sd - valor_pago, 2)
                     exec_db(
@@ -677,12 +688,12 @@ elif aba == "💰 Pagamentos":
                     )
                     st.session_state['tel_cliente'] = str(resumo['telefone'])
                     st.rerun()
-
+ 
 # --- ARQUIVADOS ---
 elif aba == "📁 Arquivados":
     st.header("Contratos Quitados")
     st.markdown("Histórico de clientes que já **zeraram** seus saldos devedores.")
-
+ 
     df_arq = select_db("""
         SELECT c.cliente, c.cpf_cnpj, c.telefone, c.valor_total, c.data_contrato,
                MAX(p.data_pagamento) AS data_quitacao, c.observacoes
@@ -717,7 +728,7 @@ elif aba == "📁 Arquivados":
                 mime="application/pdf")
     else:
         st.info("Nenhum contrato arquivado até o momento.")
-
+ 
 # --- GESTÃO ---
 elif aba == "⚙️ Gestão":
     st.header("Gerenciar")
