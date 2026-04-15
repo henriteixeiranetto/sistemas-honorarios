@@ -752,11 +752,28 @@ elif aba == "📂 Meus Contratos":
 
         vt_mc = float(c['valor_total'])
         sd_mc = float(c['saldo_devedor'])
-        m1_mc, m2_mc, m3_mc = st.columns(3)
-        m1_mc.metric("Honorários Iniciais",   f"R$ {vt_mc:,.2f}")
-        m2_mc.metric("Saldo Devedor",          f"R$ {sd_mc:,.2f}")
         tutela_atual = str(c.get('tutela', '') or 'Pendente')
-        m3_mc.metric("Status da Tutela", tutela_atual)
+
+        # Parcelas da liminar: pagas x total
+        df_plim_resumo = select_db(
+            "SELECT pago FROM parcelas_liminar WHERE contrato_id = %s", (int(id_mc),)
+        )
+        if df_plim_resumo.empty:
+            lim_label_metric  = "—"
+            lim_delta_metric  = None
+        else:
+            df_plim_resumo['pago'] = pd.to_numeric(df_plim_resumo['pago'], errors='coerce').fillna(0).astype(int)
+            lim_pagas  = int(df_plim_resumo['pago'].sum())
+            lim_total  = len(df_plim_resumo)
+            lim_label_metric = f"{lim_pagas} / {lim_total}"
+            lim_delta_metric = f"{lim_total - lim_pagas} pendente(s)" if lim_pagas < lim_total else "✅ Todas recebidas"
+
+        m1_mc, m2_mc, m3_mc, m4_mc = st.columns(4)
+        m1_mc.metric("Honorários Iniciais",      f"R$ {vt_mc:,.2f}")
+        m2_mc.metric("Saldo Devedor",             f"R$ {sd_mc:,.2f}")
+        m3_mc.metric("Status da Tutela",          tutela_atual)
+        m4_mc.metric("Parcelas da Redução",       lim_label_metric, delta=lim_delta_metric,
+                     delta_color="inverse" if (lim_delta_metric and "pendente" in str(lim_delta_metric)) else "normal")
 
         st.divider()
 
