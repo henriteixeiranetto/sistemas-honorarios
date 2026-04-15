@@ -166,7 +166,7 @@ def inicializar_banco():
         except Exception:
             conn.rollback()
  
-    # Tabela de parcelas
+    # Tabela de parcelas (honorários iniciais)
     exec_db("""
         CREATE TABLE IF NOT EXISTS parcelas (
             id              SERIAL PRIMARY KEY,
@@ -180,6 +180,29 @@ def inicializar_banco():
             forma_pagamento TEXT
         )
     """)
+
+    # Tabela de parcelas da redução da liminar (independente das parcelas de honorários)
+    exec_db("""
+        CREATE TABLE IF NOT EXISTS parcelas_liminar (
+            id             SERIAL PRIMARY KEY,
+            contrato_id    INTEGER NOT NULL
+                               REFERENCES contratos(id) ON DELETE CASCADE,
+            nr_parcela     INTEGER NOT NULL,
+            valor_parcela  REAL NOT NULL,
+            data_prevista  TEXT NOT NULL,
+            data_pagamento TEXT,
+            pago           INTEGER DEFAULT 0
+        )
+    """)
+
+    # Garante coluna tutela na tabela contratos (segurança para BDs antigos)
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE contratos ADD COLUMN IF NOT EXISTS tutela TEXT")
+            conn.commit()
+    except Exception:
+        conn.rollback()
  
 if 'banco_ok' not in st.session_state:
     inicializar_banco()
@@ -309,7 +332,7 @@ if not st.session_state['autenticado']:
                 st.error("Credenciais inválidas")
     st.stop()
  
-opcoes_menu = ["📊 Dashboard", "➕ Novo Contrato", "💰 Pagamentos", "📁 Arquivados", "⚙️ Gestão"]
+opcoes_menu = ["📊 Dashboard", "➕ Novo Contrato", "💰 Pagamentos", "📂 Meus Contratos", "📁 Arquivados", "⚙️ Gestão"]
 if 'rad_nav' not in st.session_state:
     st.session_state['rad_nav'] = "📊 Dashboard"
 aba = st.sidebar.radio("Navegação", opcoes_menu, key="rad_nav")
@@ -689,6 +712,274 @@ elif aba == "💰 Pagamentos":
                     st.session_state['tel_cliente'] = str(resumo['telefone'])
                     st.rerun()
  
+# --- MEUS CONTRATOS ---
+elif aba == "📂 Meus Contratos":
+    st.header("Meus Contratos")
+    st.markdown("Acesse, edite e acompanhe os detalhes de cada contrato — incluindo parcelas da redução da liminar.")
+
+    df_todos = select_db("SELECT * FROM contratos ORDER BY cliente ASC")
+    if df_todos.empty:
+        st.info("Nenhum contrato cadastrado ainda.")
+    else:
+        df_todos['valor_total']   = pd.to_numeric(df_todos['valor_total'],   errors='coerce').fillna(0)
+        df_todos['saldo_devedor'] = pd.to_numeric(df_todos['saldo_devedor'], errors='coerce').fillna(0)
+
+        contrato_map = {f"{r['cliente']} (Contrato #{r['id']})": r['id']
+                        for _, r in df_todos.iterrows()}
+
+        nome_sel_mc = st.selectbox("Selecione o Contrato", options=list(contrato_map.keys()),
+                                   key="meus_contratos_sel")
+        id_mc       = contrato_map[nome_sel_mc]
+        c           = df_todos[df_todos['id'] == id_mc].iloc[0]
+
+        # ── Cabeçalho do cliente ──────────────────────────────────────────
+        st.markdown(f"""
+            <div class='info-cliente'>
+                <b>👤 {c['cliente']}</b> &nbsp;|&nbsp;
+                💳 {formatar_cpf_cnpj(c['cpf_cnpj'])} &nbsp;|&nbsp;
+                📞 {formatar_telefone(c['telefone'])} &nbsp;|&nbsp;
+                📅 Contrato: {formatar_data(c['data_contrato'])}
+            </div>
+        """, unsafe_allow_html=True)
+
+        infos_proc_mc = []
+        if not nulo(c.get('nr_processo', '')): infos_proc_mc.append(f"📄 {c['nr_processo']}")
+        if not nulo(c.get('nr_vara',     '')): infos_proc_mc.append(f"🏛️ {c['nr_vara']}")
+        if not nulo(c.get('nome_juiz',   '')): infos_proc_mc.append(f"👨‍⚖️ {c['nome_juiz']}")
+        if not nulo(c.get('comarca',     '')): infos_proc_mc.append(f"📍 {c['comarca']}")
+        if infos_proc_mc:
+            st.caption(" &nbsp;|&nbsp; ".join(infos_proc_mc))
+
+        vt_mc = float(c['valor_total'])
+        sd_mc = float(c['saldo_devedor'])
+        m1_mc, m2_mc, m3_mc = st.columns(3)
+        m1_mc.metric("Honorários Iniciais",   f"R$ {vt_mc:,.2f}")
+        m2_mc.metric("Saldo Devedor",          f"R$ {sd_mc:,.2f}")
+        tutela_atual = str(c.get('tutela', '') or 'Pendente')
+        m3_mc.metric("Status da Tutela", tutela_atual)
+
+        st.divider()
+
+        # ═══════════════════════════════════════════════════════════════════
+        # EXPANDER 1 — EDITAR CONTRATO
+        # ═══════════════════════════════════════════════════════════════════
+        with st.expander("✏️ Editar Contrato", expanded=False):
+            st.subheader("Dados Gerais")
+            col_e1, col_e2 = st.columns(2)
+            ed_nome   = col_e1.text_input("Nome do Cliente",  value=str(c['cliente']),  key="ed_nome")
+            ed_cpf    = col_e2.text_input("CPF / CNPJ",       value=str(c['cpf_cnpj'] or ''), key="ed_cpf")
+            ed_tel    = col_e1.text_input("Telefone",          value=str(c['telefone'] or ''),  key="ed_tel")
+            ed_obs    = col_e2.text_area("Observações",        value=str(c['observacoes'] or ''), key="ed_obs")
+
+            st.subheader("⚖️ Honorários da Liminar")
+            col_e3, col_e4 = st.columns(2)
+            tutela_opts  = ["Pendente", "Deferido", "Indeferido", "Parcial"]
+            tutela_idx   = tutela_opts.index(tutela_atual) if tutela_atual in tutela_opts else 0
+            ed_tutela    = col_e3.selectbox("Status da Tutela", tutela_opts,
+                                             index=tutela_idx, key="ed_tutela")
+            ed_lim_fixo  = col_e4.number_input("Honorários Fixos da Liminar (R$)",
+                                                min_value=0.0, step=100.0, format="%.2f",
+                                                value=float(c.get('hon_liminar_fixo') or 0),
+                                                key="ed_lim_fixo")
+            col_e5, col_e6 = st.columns(2)
+            ed_red_vlr   = col_e5.number_input("Valor da Redução Obtida (R$)",
+                                                min_value=0.0, step=100.0, format="%.2f",
+                                                value=float(c.get('hon_liminar_reducao_vlr') or 0),
+                                                key="ed_red_vlr")
+            ed_red_prc   = col_e6.number_input("Nº de Parcelas da Redução",
+                                                min_value=0, max_value=360, step=1,
+                                                value=int(c.get('hon_liminar_reducao_prc') or 0),
+                                                key="ed_red_prc")
+
+            st.subheader("🏆 Honorários de Êxito")
+            col_e7, col_e8 = st.columns(2)
+            ed_exito_pct  = col_e7.number_input("Percentual de Êxito (%)",
+                                                  min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
+                                                  value=float(c.get('hon_exito_percentual') or 0),
+                                                  key="ed_exito_pct")
+            ed_exito_fixo = col_e8.number_input("Valor Fixo de Êxito (R$)",
+                                                  min_value=0.0, step=100.0, format="%.2f",
+                                                  value=float(c.get('hon_exito_fixo') or 0),
+                                                  key="ed_exito_fixo")
+
+            st.subheader("📁 Dados do Processo")
+            col_e9, col_e10 = st.columns(2)
+            ed_proc  = col_e9.text_input("Número do Processo", value=str(c.get('nr_processo') or ''),  key="ed_proc")
+            ed_vara  = col_e10.text_input("Número da Vara",    value=str(c.get('nr_vara')    or ''),  key="ed_vara")
+            col_e11, col_e12 = st.columns(2)
+            ed_juiz  = col_e11.text_input("Nome do Juiz",       value=str(c.get('nome_juiz')  or ''), key="ed_juiz")
+            ed_com   = col_e12.text_input("Comarca",            value=str(c.get('comarca')    or ''), key="ed_com")
+
+            if st.button("💾 Salvar Alterações", type="primary", key="btn_salvar_edicao"):
+                exec_db("""
+                    UPDATE contratos SET
+                        cliente                 = %s,
+                        cpf_cnpj                = %s,
+                        telefone                = %s,
+                        observacoes             = %s,
+                        tutela                  = %s,
+                        hon_liminar_fixo        = %s,
+                        hon_liminar_reducao_vlr = %s,
+                        hon_liminar_reducao_prc = %s,
+                        hon_exito_percentual    = %s,
+                        hon_exito_fixo          = %s,
+                        nr_processo             = %s,
+                        nr_vara                 = %s,
+                        nome_juiz               = %s,
+                        comarca                 = %s
+                    WHERE id = %s
+                """, (
+                    ed_nome.strip(),
+                    formatar_cpf_cnpj(re.sub(r'\D', '', ed_cpf)),
+                    formatar_telefone(re.sub(r'\D', '', ed_tel)),
+                    ed_obs.strip() or None,
+                    ed_tutela,
+                    ed_lim_fixo  or None,
+                    ed_red_vlr   or None,
+                    ed_red_prc   or None,
+                    ed_exito_pct  or None,
+                    ed_exito_fixo or None,
+                    ed_proc.strip()  or None,
+                    ed_vara.strip()  or None,
+                    ed_juiz.strip()  or None,
+                    ed_com.strip()   or None,
+                    int(id_mc)
+                ))
+                st.success("Contrato atualizado com sucesso!")
+                time.sleep(0.8)
+                st.rerun()
+
+        # ═══════════════════════════════════════════════════════════════════
+        # EXPANDER 2 — PARCELAS DA REDUÇÃO DA LIMINAR
+        # ═══════════════════════════════════════════════════════════════════
+        with st.expander("📋 Parcelas da Redução da Liminar", expanded=True):
+
+            df_plim = select_db(
+                "SELECT * FROM parcelas_liminar WHERE contrato_id = %s ORDER BY nr_parcela",
+                (int(id_mc),)
+            )
+
+            # ── Ainda sem parcelas cadastradas: formulário de criação ──────
+            if df_plim.empty:
+                st.info("Nenhuma parcela da redução cadastrada para este contrato.")
+
+                if tutela_atual in ("Deferido", "Parcial"):
+                    st.markdown("**Cadastrar parcelas da redução obtida:**")
+                    col_pl1, col_pl2, col_pl3 = st.columns(3)
+                    pl_vlr_total = col_pl1.number_input(
+                        "Valor Total da Redução (R$)", min_value=0.01, step=100.0,
+                        format="%.2f", key="pl_vlr_total",
+                        value=float(c.get('hon_liminar_reducao_vlr') or 0) or 100.0
+                    )
+                    pl_qtd = col_pl2.number_input(
+                        "Número de Parcelas", min_value=1, max_value=360, step=1,
+                        value=int(c.get('hon_liminar_reducao_prc') or 1),
+                        key="pl_qtd"
+                    )
+                    pl_inicio = col_pl3.date_input("Data da 1ª Parcela", value=date.today(), key="pl_inicio")
+
+                    vlr_parc_prev = round(pl_vlr_total / pl_qtd, 2) if pl_qtd > 0 else 0.0
+                    st.metric("Valor de Cada Parcela", f"R$ {vlr_parc_prev:,.2f}")
+
+                    if st.button("📥 Criar Parcelas da Redução", type="primary", key="btn_criar_plim"):
+                        v_base_lim = round(pl_vlr_total / pl_qtd, 2)
+                        for i in range(1, pl_qtd + 1):
+                            v_f_lim  = round(pl_vlr_total - v_base_lim * (pl_qtd - 1), 2) if i == pl_qtd else v_base_lim
+                            venc_lim = (datetime.combine(pl_inicio, datetime.min.time()) +
+                                        pd.DateOffset(months=i - 1))
+                            exec_db(
+                                """INSERT INTO parcelas_liminar
+                                   (contrato_id, nr_parcela, valor_parcela, data_prevista)
+                                   VALUES (%s, %s, %s, %s)""",
+                                (int(id_mc), i, v_f_lim, venc_lim.strftime("%Y-%m-%d"))
+                            )
+                        st.success(f"{pl_qtd} parcela(s) criada(s) com sucesso!")
+                        time.sleep(0.8)
+                        st.rerun()
+                else:
+                    st.warning("A tutela ainda está como **Pendente** ou **Indeferida**. "
+                               "Edite o status da tutela acima para cadastrar parcelas da redução.")
+
+            # ── Parcelas já existentes: acompanhamento ─────────────────────
+            else:
+                df_plim['pago']          = pd.to_numeric(df_plim['pago'], errors='coerce').fillna(0).astype(int)
+                df_plim['valor_parcela'] = pd.to_numeric(df_plim['valor_parcela'], errors='coerce')
+
+                total_lim     = df_plim['valor_parcela'].sum()
+                pagas_lim     = df_plim[df_plim['pago'] == 1]['valor_parcela'].sum()
+                pendentes_lim = df_plim[df_plim['pago'] == 0]['valor_parcela'].sum()
+
+                ml1, ml2, ml3 = st.columns(3)
+                ml1.metric("Total da Redução",     f"R$ {total_lim:,.2f}")
+                ml2.metric("Já Recebido",           f"R$ {pagas_lim:,.2f}")
+                ml3.metric("A Receber",             f"R$ {pendentes_lim:,.2f}")
+
+                pct_lim = float(pagas_lim / total_lim) if total_lim > 0 else 0.0
+                st.progress(pct_lim, text=f"Progresso: {pct_lim:.1%} recebido")
+
+                # Tabela de acompanhamento
+                df_lim_view                  = df_plim.copy()
+                df_lim_view['Status']        = df_lim_view.apply(
+                    lambda r: "🟢 Recebido" if r['pago'] == 1 else obter_status_parcela(r['pago'], r['data_prevista']),
+                    axis=1
+                )
+                df_lim_view['Previsão']      = df_lim_view['data_prevista'].apply(formatar_data)
+                df_lim_view['Recebido em']   = df_lim_view['data_pagamento'].apply(formatar_data)
+
+                st.dataframe(
+                    df_lim_view,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_order=['nr_parcela', 'valor_parcela', 'Previsão', 'Recebido em', 'Status'],
+                    column_config={
+                        "nr_parcela":    "Parcela",
+                        "valor_parcela": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                    }
+                )
+
+                # Marcar parcela como recebida
+                pendentes_lim_df = df_plim[df_plim['pago'] == 0]
+                if not pendentes_lim_df.empty:
+                    st.markdown("**Registrar Recebimento:**")
+                    col_pl_a, col_pl_b = st.columns(2)
+
+                    opcoes_lim = {
+                        f"Parcela {r.nr_parcela} — Prev. {formatar_data(r.data_prevista)} — R$ {r.valor_parcela:,.2f}": r.nr_parcela
+                        for _, r in pendentes_lim_df.iterrows()
+                    }
+                    lim_label = col_pl_a.selectbox(
+                        "Qual parcela recebeu?", options=list(opcoes_lim.keys()), key="lim_sel_parc"
+                    )
+                    n_lim = opcoes_lim[lim_label]
+                    vlr_lim_row = float(
+                        pendentes_lim_df[pendentes_lim_df['nr_parcela'] == n_lim]['valor_parcela'].values[0]
+                    )
+                    vlr_lim_recebido = col_pl_b.number_input(
+                        "Valor Recebido (R$)", value=vlr_lim_row, format="%.2f", key="lim_vlr_rec"
+                    )
+                    data_lim_receb = st.date_input("Data do Recebimento", value=date.today(), key="lim_data_rec")
+
+                    if st.button("✅ Confirmar Recebimento da Parcela", type="primary", key="btn_conf_lim"):
+                        exec_db(
+                            """UPDATE parcelas_liminar
+                               SET pago = 1, data_pagamento = %s
+                               WHERE contrato_id = %s AND nr_parcela = %s""",
+                            (data_lim_receb.strftime("%Y-%m-%d"), int(id_mc), n_lim)
+                        )
+                        st.success(f"Parcela {n_lim} marcada como recebida!")
+                        time.sleep(0.8)
+                        st.rerun()
+                else:
+                    st.success("🎉 Todas as parcelas da redução já foram recebidas!")
+
+                st.divider()
+                if st.button("🗑️ Apagar todas as parcelas da redução deste contrato",
+                             key="btn_del_plim"):
+                    exec_db("DELETE FROM parcelas_liminar WHERE contrato_id = %s", (int(id_mc),))
+                    st.warning("Parcelas da redução removidas.")
+                    time.sleep(0.8)
+                    st.rerun()
+
 # --- ARQUIVADOS ---
 elif aba == "📁 Arquivados":
     st.header("Contratos Quitados")
