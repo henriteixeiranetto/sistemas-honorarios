@@ -156,6 +156,9 @@ def inicializar_banco():
         ("nr_vara",                 "TEXT"),
         ("nome_juiz",               "TEXT"),
         ("comarca",                 "TEXT"),
+        ("exito_pago",              "INTEGER"),
+        ("exito_data_pagamento",    "TEXT"),
+        ("exito_valor_recebido",    "REAL"),
     ]
     conn = _conn()
     for col, tipo in novas_colunas:
@@ -584,7 +587,7 @@ elif aba == "➕ Novo Contrato":
 # --- PAGAMENTOS ---
 elif aba == "💰 Pagamentos":
     st.header("Registrar Recebimento")
- 
+
     if 'ultimo_recibo' in st.session_state:
         with st.container(border=True):
             st.subheader("📄 Recibo Gerado")
@@ -598,29 +601,29 @@ elif aba == "💰 Pagamentos":
                 del st.session_state['tel_cliente']
                 st.rerun()
         st.divider()
- 
+
     df_contratos = select_db("SELECT * FROM contratos WHERE saldo_devedor > 0 ORDER BY cliente ASC")
     if df_contratos.empty:
         st.info("Não há contratos pendentes.")
     else:
         df_contratos['valor_total']   = pd.to_numeric(df_contratos['valor_total'],   errors='coerce').fillna(0)
         df_contratos['saldo_devedor'] = pd.to_numeric(df_contratos['saldo_devedor'], errors='coerce').fillna(0)
- 
+
         cliente_map     = {f"{r['cliente']} (Contrato #{r['id']})": r['id']
                            for _, r in df_contratos.iterrows()}
         opcoes_dropdown = list(cliente_map.keys())
- 
+
         if 'cliente_foco' in st.session_state:
             foco_id = st.session_state.pop('cliente_foco')
             for k in opcoes_dropdown:
                 if cliente_map[k] == foco_id:
                     st.session_state['select_cliente'] = k
                     break
- 
+
         nome_sel = st.selectbox("Selecione o Cliente", options=opcoes_dropdown, key='select_cliente')
         id_sel   = cliente_map[nome_sel]
         resumo   = df_contratos[df_contratos['id'] == id_sel].iloc[0]
- 
+
         st.markdown(f"""
             <div class='info-cliente'>
                 <b>Dados do Cliente:</b><br>
@@ -628,8 +631,7 @@ elif aba == "💰 Pagamentos":
                 📞 Tel: {formatar_telefone(resumo['telefone'])}
             </div>
         """, unsafe_allow_html=True)
- 
-        # Dados do processo se disponíveis
+
         infos_proc = []
         if not nulo(resumo.get('nr_processo',  '')): infos_proc.append(f"📄 Processo: {resumo['nr_processo']}")
         if not nulo(resumo.get('nr_vara',       '')): infos_proc.append(f"🏛️ Vara: {resumo['nr_vara']}")
@@ -637,7 +639,7 @@ elif aba == "💰 Pagamentos":
         if not nulo(resumo.get('comarca',       '')): infos_proc.append(f"📍 Comarca: {resumo['comarca']}")
         if infos_proc:
             st.markdown(" &nbsp;|&nbsp; ".join(infos_proc))
- 
+
         vt = float(resumo['valor_total'])
         sd = float(resumo['saldo_devedor'])
         col_r1, col_r2 = st.columns(2)
@@ -645,72 +647,307 @@ elif aba == "💰 Pagamentos":
         col_r2.metric("Saldo Restante", f"R$ {sd:,.2f}")
         pct = float(max(0.0, min(1.0, (vt - sd) / vt))) if vt > 0 else 0.0
         st.progress(pct, text=f"Progresso de Pagamento: {pct:.1%}")
- 
+
         if not nulo(resumo['observacoes']):
             st.markdown(f"<div class='observacao-box'><b>Notas:</b> {resumo['observacoes']}</div>",
                         unsafe_allow_html=True)
- 
-        df_parc = select_db(
-            "SELECT * FROM parcelas WHERE contrato_id = %s ORDER BY nr_parcela", (int(id_sel),))
-        if not df_parc.empty:
-            df_parc['pago']          = pd.to_numeric(df_parc['pago'], errors='coerce').fillna(0).astype(int)
-            df_parc['valor_parcela'] = pd.to_numeric(df_parc['valor_parcela'], errors='coerce')
- 
-            df_view                    = df_parc.copy()
-            df_view['Status']          = df_view.apply(
-                lambda r: obter_status_parcela(r['pago'], r['data_vencimento']), axis=1)
-            df_view['Vencimento']      = df_view['data_vencimento'].apply(formatar_data)
-            df_view['forma_pagamento'] = df_view['forma_pagamento'].apply(
-                lambda x: "-" if nulo(x) else str(x))
- 
-            st.dataframe(df_view, use_container_width=True, hide_index=True,
-                         column_order=['nr_parcela','valor_parcela','Vencimento','Status','forma_pagamento'],
-                         column_config={
-                             "valor_parcela":   st.column_config.NumberColumn("Valor",   format="R$ %.2f"),
-                             "nr_parcela":      "Parcela",
-                             "forma_pagamento": "Método",
-                         })
- 
-            pendentes = df_parc[df_parc['pago'] == 0]
-            if not pendentes.empty:
-                col_p, col_v = st.columns(2)
-                opcoes_parc  = {f"Parc {r.nr_parcela} (Venc: {formatar_data(r.data_vencimento)})": r.nr_parcela
-                                for _, r in pendentes.iterrows()}
-                parc_label   = col_p.selectbox("Qual parcela pagar?", options=list(opcoes_parc.keys()))
-                n_p_f        = opcoes_parc[parc_label]
-                valor_pago   = col_v.number_input("Valor Recebido (R$)",
-                    value=float(pendentes[pendentes['nr_parcela'] == n_p_f]['valor_parcela'].values[0]),
-                    format="%.2f")
-                forma_p = st.selectbox("Método de Recebimento",
-                                       ["Pix","Dinheiro","Transferência","Cartão","Boleto"])
- 
-                if st.button("Confirmar Pagamento", type="primary"):
-                    novo_saldo = round(sd - valor_pago, 2)
+
+        tab_ini, tab_lim, tab_exit, tab_comb = st.tabs([
+            "💰 Honorários Iniciais", "⚖️ Liminar / Redução", "🏆 Êxito", "📋 Combinado"
+        ])
+
+        # ── TAB 1: HONORÁRIOS INICIAIS ────────────────────────────────────
+        with tab_ini:
+            df_parc = select_db(
+                "SELECT * FROM parcelas WHERE contrato_id = %s ORDER BY nr_parcela", (int(id_sel),))
+            if df_parc.empty:
+                st.info("Nenhuma parcela de honorários iniciais cadastrada.")
+            else:
+                df_parc['pago']          = pd.to_numeric(df_parc['pago'], errors='coerce').fillna(0).astype(int)
+                df_parc['valor_parcela'] = pd.to_numeric(df_parc['valor_parcela'], errors='coerce')
+
+                df_view                    = df_parc.copy()
+                df_view['Status']          = df_view.apply(
+                    lambda r: obter_status_parcela(r['pago'], r['data_vencimento']), axis=1)
+                df_view['Vencimento']      = df_view['data_vencimento'].apply(formatar_data)
+                df_view['forma_pagamento'] = df_view['forma_pagamento'].apply(
+                    lambda x: "-" if nulo(x) else str(x))
+
+                st.dataframe(df_view, use_container_width=True, hide_index=True,
+                             column_order=['nr_parcela','valor_parcela','Vencimento','Status','forma_pagamento'],
+                             column_config={
+                                 "valor_parcela":   st.column_config.NumberColumn("Valor",   format="R$ %.2f"),
+                                 "nr_parcela":      "Parcela",
+                                 "forma_pagamento": "Método",
+                             })
+
+                pendentes = df_parc[df_parc['pago'] == 0]
+                if not pendentes.empty:
+                    col_p, col_v = st.columns(2)
+                    opcoes_parc  = {f"Parc {r.nr_parcela} (Venc: {formatar_data(r.data_vencimento)})": r.nr_parcela
+                                    for _, r in pendentes.iterrows()}
+                    parc_label   = col_p.selectbox("Qual parcela pagar?", options=list(opcoes_parc.keys()),
+                                                   key=f"ini_parc_{id_sel}")
+                    n_p_f        = opcoes_parc[parc_label]
+                    valor_pago   = col_v.number_input("Valor Recebido (R$)",
+                        value=float(pendentes[pendentes['nr_parcela'] == n_p_f]['valor_parcela'].values[0]),
+                        format="%.2f", key=f"ini_vlr_{id_sel}")
+                    forma_p = st.selectbox("Método de Recebimento",
+                                           ["Pix","Dinheiro","Transferência","Cartão","Boleto"],
+                                           key=f"ini_forma_{id_sel}")
+
+                    if st.button("Confirmar Pagamento", type="primary", key=f"ini_btn_{id_sel}"):
+                        novo_saldo = round(sd - valor_pago, 2)
+                        exec_db(
+                            "UPDATE parcelas SET pago=1, data_pagamento=%s, forma_pagamento=%s WHERE contrato_id=%s AND nr_parcela=%s",
+                            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), forma_p, id_sel, n_p_f)
+                        )
+                        exec_db("UPDATE contratos SET saldo_devedor=%s WHERE id=%s", (novo_saldo, id_sel))
+                        if novo_saldo <= 0:
+                            exec_db("UPDATE contratos SET observacoes='Pago' WHERE id=%s", (int(id_sel),))
+                            st.balloons()
+                        st.session_state['ultimo_recibo'] = (
+                            f"⚖️ *RECIBO DE HONORÁRIOS*\n"
+                            f"---------------------------------------\n"
+                            f"*Cliente:* {resumo['cliente']}\n"
+                            f"*CPF/CNPJ:* {formatar_cpf_cnpj(resumo['cpf_cnpj'])}\n"
+                            f"*Referente:* Parcela {n_p_f} — Honorários Iniciais\n"
+                            f"*Valor Pago:* R$ {valor_pago:,.2f}\n"
+                            f"*Data/Hora:* {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
+                            f"*Método:* {forma_p}\n"
+                            f"---------------------------------------\n"
+                            f"✅ *Situação Atual:*\n"
+                            f"*Saldo Devedor Restante:* R$ {max(novo_saldo, 0):,.2f}\n"
+                            f"---------------------------------------\n"
+                            f"Obrigado pela confiança!"
+                        )
+                        st.session_state['tel_cliente'] = str(resumo['telefone'])
+                        st.rerun()
+                else:
+                    st.success("🎉 Todas as parcelas iniciais já foram pagas!")
+
+        # ── TAB 2: LIMINAR / REDUÇÃO ──────────────────────────────────────
+        with tab_lim:
+            df_plim_pag = select_db(
+                "SELECT * FROM parcelas_liminar WHERE contrato_id = %s ORDER BY nr_parcela", (int(id_sel),))
+            tutela_res = str(resumo.get('tutela', '') or 'Pendente')
+            if df_plim_pag.empty:
+                if tutela_res in ("Deferido", "Parcial"):
+                    st.info("Tutela deferida, mas as parcelas da redução ainda não foram cadastradas. "
+                            "Acesse **📂 Meus Contratos** para criar as parcelas.")
+                else:
+                    st.info(f"Status da tutela: **{tutela_res}**. "
+                            "Quando a tutela for deferida, cadastre as parcelas em **📂 Meus Contratos**.")
+            else:
+                df_plim_pag['pago']          = pd.to_numeric(df_plim_pag['pago'], errors='coerce').fillna(0).astype(int)
+                df_plim_pag['valor_parcela'] = pd.to_numeric(df_plim_pag['valor_parcela'], errors='coerce')
+
+                df_plim_view                = df_plim_pag.copy()
+                df_plim_view['Status']      = df_plim_view.apply(
+                    lambda r: "🟢 Recebido" if r['pago'] == 1 else obter_status_parcela(r['pago'], r['data_prevista']),
+                    axis=1)
+                df_plim_view['Previsão']    = df_plim_view['data_prevista'].apply(formatar_data)
+                df_plim_view['Recebido em'] = df_plim_view['data_pagamento'].apply(formatar_data)
+
+                st.dataframe(df_plim_view, use_container_width=True, hide_index=True,
+                             column_order=['nr_parcela','valor_parcela','Previsão','Recebido em','Status'],
+                             column_config={
+                                 "nr_parcela":    "Parcela",
+                                 "valor_parcela": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                             })
+
+                pend_lim = df_plim_pag[df_plim_pag['pago'] == 0]
+                if not pend_lim.empty:
+                    col_lp, col_lv = st.columns(2)
+                    opcoes_lim_pag = {
+                        f"Parcela {r.nr_parcela} — Prev. {formatar_data(r.data_prevista)} — R$ {r.valor_parcela:,.2f}": r.nr_parcela
+                        for _, r in pend_lim.iterrows()
+                    }
+                    lim_pag_label = col_lp.selectbox("Qual parcela recebeu?",
+                                                     options=list(opcoes_lim_pag.keys()),
+                                                     key=f"lim_pag_sel_{id_sel}")
+                    n_lim_pag  = opcoes_lim_pag[lim_pag_label]
+                    vlr_lim_pag = float(pend_lim[pend_lim['nr_parcela'] == n_lim_pag]['valor_parcela'].values[0])
+                    vlr_lim_rec = col_lv.number_input("Valor Recebido (R$)", value=vlr_lim_pag,
+                                                      format="%.2f", key=f"lim_pag_vlr_{id_sel}")
+                    data_lim_pag = st.date_input("Data do Recebimento", value=date.today(),
+                                                 key=f"lim_pag_data_{id_sel}")
+
+                    if st.button("✅ Confirmar Recebimento", type="primary", key=f"lim_pag_btn_{id_sel}"):
+                        exec_db(
+                            "UPDATE parcelas_liminar SET pago=1, data_pagamento=%s WHERE contrato_id=%s AND nr_parcela=%s",
+                            (data_lim_pag.strftime("%Y-%m-%d"), int(id_sel), n_lim_pag)
+                        )
+                        st.session_state['ultimo_recibo'] = (
+                            f"⚖️ *RECIBO — LIMINAR / REDUÇÃO*\n"
+                            f"---------------------------------------\n"
+                            f"*Cliente:* {resumo['cliente']}\n"
+                            f"*CPF/CNPJ:* {formatar_cpf_cnpj(resumo['cpf_cnpj'])}\n"
+                            f"*Referente:* Parcela {n_lim_pag} da Redução da Liminar\n"
+                            f"*Valor Recebido:* R$ {vlr_lim_rec:,.2f}\n"
+                            f"*Data:* {data_lim_pag.strftime('%d/%m/%Y')}\n"
+                            f"---------------------------------------\n"
+                            f"Obrigado pela confiança!"
+                        )
+                        st.session_state['tel_cliente'] = str(resumo['telefone'])
+                        st.rerun()
+                else:
+                    st.success("🎉 Todas as parcelas da redução já foram recebidas!")
+
+        # ── TAB 3: ÊXITO ─────────────────────────────────────────────────
+        with tab_exit:
+            exito_pago_atual = int(resumo.get('exito_pago') or 0)
+            hon_exito_pct    = float(resumo.get('hon_exito_percentual') or 0)
+            hon_exito_fix    = float(resumo.get('hon_exito_fixo')       or 0)
+
+            if hon_exito_pct == 0 and hon_exito_fix == 0:
+                st.info("Nenhum honorário de êxito configurado para este contrato. "
+                        "Configure em **📂 Meus Contratos → Editar Contrato**.")
+            elif exito_pago_atual == 1:
+                exito_data_rec = str(resumo.get('exito_data_pagamento') or '')
+                exito_vlr_rec  = float(resumo.get('exito_valor_recebido') or 0)
+                st.success(f"🏆 Honorários de êxito já recebidos em **{formatar_data(exito_data_rec)}**: "
+                           f"**R$ {exito_vlr_rec:,.2f}**")
+            else:
+                if hon_exito_pct > 0:
+                    st.info(f"Percentual de êxito acordado: **{hon_exito_pct:.2f}%** sobre o valor da causa.")
+                if hon_exito_fix > 0:
+                    st.info(f"Valor fixo de êxito acordado: **R$ {hon_exito_fix:,.2f}**")
+
+                col_ex1, col_ex2 = st.columns(2)
+                vlr_exito_rec  = col_ex1.number_input("Valor Recebido (R$)",
+                                                       min_value=0.01, step=100.0, format="%.2f",
+                                                       value=hon_exito_fix if hon_exito_fix > 0 else 100.0,
+                                                       key=f"exit_vlr_{id_sel}")
+                data_exito_rec = col_ex2.date_input("Data do Recebimento", value=date.today(),
+                                                    key=f"exit_data_{id_sel}")
+
+                if st.button("🏆 Confirmar Recebimento de Êxito", type="primary", key=f"exit_btn_{id_sel}"):
                     exec_db(
-                        "UPDATE parcelas SET pago=1, data_pagamento=%s, forma_pagamento=%s WHERE contrato_id=%s AND nr_parcela=%s",
-                        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), forma_p, id_sel, n_p_f)
+                        "UPDATE contratos SET exito_pago=1, exito_data_pagamento=%s, exito_valor_recebido=%s WHERE id=%s",
+                        (data_exito_rec.strftime("%Y-%m-%d"), vlr_exito_rec, int(id_sel))
                     )
-                    exec_db("UPDATE contratos SET saldo_devedor=%s WHERE id=%s", (novo_saldo, id_sel))
-                    if novo_saldo <= 0:
-                        exec_db("UPDATE contratos SET observacoes='Pago' WHERE id=%s", (int(id_sel),))
-                        st.balloons()
                     st.session_state['ultimo_recibo'] = (
-                        f"⚖️ *RECIBO DE HONORÁRIOS*\n"
+                        f"⚖️ *RECIBO — HONORÁRIOS DE ÊXITO*\n"
                         f"---------------------------------------\n"
                         f"*Cliente:* {resumo['cliente']}\n"
                         f"*CPF/CNPJ:* {formatar_cpf_cnpj(resumo['cpf_cnpj'])}\n"
-                        f"*Referente:* Parcela {n_p_f}\n"
-                        f"*Valor Pago:* R$ {valor_pago:,.2f}\n"
-                        f"*Data/Hora:* {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-                        f"*Método:* {forma_p}\n"
-                        f"---------------------------------------\n"
-                        f"✅ *Situação Atual:*\n"
-                        f"*Saldo Devedor Restante:* R$ {max(novo_saldo, 0):,.2f}\n"
+                        f"*Referente:* Honorários de Êxito\n"
+                        f"*Valor Recebido:* R$ {vlr_exito_rec:,.2f}\n"
+                        f"*Data:* {data_exito_rec.strftime('%d/%m/%Y')}\n"
                         f"---------------------------------------\n"
                         f"Obrigado pela confiança!"
                     )
                     st.session_state['tel_cliente'] = str(resumo['telefone'])
                     st.rerun()
+
+        # ── TAB 4: COMBINADO ─────────────────────────────────────────────
+        with tab_comb:
+            st.markdown("Registre múltiplos recebimentos de uma vez (ex: inicial + liminar).")
+
+            df_parc_c    = select_db(
+                "SELECT * FROM parcelas WHERE contrato_id=%s AND pago=0 ORDER BY nr_parcela", (int(id_sel),))
+            df_plim_c    = select_db(
+                "SELECT * FROM parcelas_liminar WHERE contrato_id=%s AND pago=0 ORDER BY nr_parcela", (int(id_sel),))
+            exito_pago_c    = int(resumo.get('exito_pago') or 0)
+            hon_exito_fix_c = float(resumo.get('hon_exito_fixo') or 0)
+            hon_exito_pct_c = float(resumo.get('hon_exito_percentual') or 0)
+            tem_exito       = exito_pago_c == 0 and (hon_exito_pct_c > 0 or hon_exito_fix_c > 0)
+
+            if df_parc_c.empty and df_plim_c.empty and not tem_exito:
+                st.success("Não há pendências a registrar para este contrato.")
+            else:
+                comb_ini  = st.checkbox("💰 Honorários Iniciais",  key=f"comb_ini_{id_sel}",  disabled=df_parc_c.empty)
+                comb_lim  = st.checkbox("⚖️ Liminar / Redução",    key=f"comb_lim_{id_sel}",  disabled=df_plim_c.empty)
+                comb_exit = st.checkbox("🏆 Êxito",                 key=f"comb_exit_{id_sel}", disabled=not tem_exito)
+
+                parc_comb_sel = None; vlr_ini_comb  = 0.0
+                parc_lim_sel  = None; vlr_lim_comb  = 0.0
+                vlr_exit_comb = 0.0
+
+                if comb_ini and not df_parc_c.empty:
+                    df_parc_c['valor_parcela'] = pd.to_numeric(df_parc_c['valor_parcela'], errors='coerce')
+                    opcoes_ini_c = {f"Parc {r.nr_parcela} (Venc: {formatar_data(r.data_vencimento)})": r.nr_parcela
+                                   for _, r in df_parc_c.iterrows()}
+                    c1, c2 = st.columns(2)
+                    parc_lbl_c    = c1.selectbox("Parcela inicial:", list(opcoes_ini_c.keys()),
+                                                 key=f"comb_ini_sel_{id_sel}")
+                    parc_comb_sel = opcoes_ini_c[parc_lbl_c]
+                    vlr_ini_comb  = c2.number_input("Valor inicial (R$)",
+                        value=float(df_parc_c[df_parc_c['nr_parcela']==parc_comb_sel]['valor_parcela'].values[0]),
+                        format="%.2f", key=f"comb_ini_vlr_{id_sel}")
+
+                if comb_lim and not df_plim_c.empty:
+                    df_plim_c['valor_parcela'] = pd.to_numeric(df_plim_c['valor_parcela'], errors='coerce')
+                    opcoes_lim_c = {f"Parcela {r.nr_parcela} — R$ {r.valor_parcela:,.2f}": r.nr_parcela
+                                    for _, r in df_plim_c.iterrows()}
+                    c3, c4 = st.columns(2)
+                    lim_lbl_c    = c3.selectbox("Parcela liminar:", list(opcoes_lim_c.keys()),
+                                                key=f"comb_lim_sel_{id_sel}")
+                    parc_lim_sel = opcoes_lim_c[lim_lbl_c]
+                    vlr_lim_comb = c4.number_input("Valor liminar (R$)",
+                        value=float(df_plim_c[df_plim_c['nr_parcela']==parc_lim_sel]['valor_parcela'].values[0]),
+                        format="%.2f", key=f"comb_lim_vlr_{id_sel}")
+
+                if comb_exit and tem_exito:
+                    vlr_exit_comb = st.number_input("Valor Êxito (R$)",
+                        value=hon_exito_fix_c if hon_exito_fix_c > 0 else 100.0,
+                        format="%.2f", key=f"comb_exit_vlr_{id_sel}")
+
+                if comb_ini or comb_lim or comb_exit:
+                    forma_comb = st.selectbox("Método de Recebimento",
+                                              ["Pix","Dinheiro","Transferência","Cartão","Boleto"],
+                                              key=f"comb_forma_{id_sel}")
+                    data_comb  = st.date_input("Data do Recebimento", value=date.today(),
+                                               key=f"comb_data_{id_sel}")
+                    total_comb = vlr_ini_comb + vlr_lim_comb + vlr_exit_comb
+                    st.metric("Total a Registrar", f"R$ {total_comb:,.2f}")
+
+                    if st.button("✅ Confirmar Pagamento Combinado", type="primary", key=f"comb_btn_{id_sel}"):
+                        linhas_recibo = [
+                            f"⚖️ *RECIBO COMBINADO DE HONORÁRIOS*",
+                            f"---------------------------------------",
+                            f"*Cliente:* {resumo['cliente']}",
+                            f"*CPF/CNPJ:* {formatar_cpf_cnpj(resumo['cpf_cnpj'])}",
+                            f"*Data:* {data_comb.strftime('%d/%m/%Y')} | *Método:* {forma_comb}",
+                            f"---------------------------------------",
+                        ]
+                        novo_saldo_c = sd
+                        if comb_ini and parc_comb_sel is not None:
+                            exec_db(
+                                "UPDATE parcelas SET pago=1, data_pagamento=%s, forma_pagamento=%s WHERE contrato_id=%s AND nr_parcela=%s",
+                                (data_comb.strftime("%Y-%m-%d"), forma_comb, int(id_sel), parc_comb_sel)
+                            )
+                            novo_saldo_c = round(novo_saldo_c - vlr_ini_comb, 2)
+                            linhas_recibo.append(f"💰 Honorários Iniciais (Parc. {parc_comb_sel}): R$ {vlr_ini_comb:,.2f}")
+                        if comb_lim and parc_lim_sel is not None:
+                            exec_db(
+                                "UPDATE parcelas_liminar SET pago=1, data_pagamento=%s WHERE contrato_id=%s AND nr_parcela=%s",
+                                (data_comb.strftime("%Y-%m-%d"), int(id_sel), parc_lim_sel)
+                            )
+                            linhas_recibo.append(f"⚖️ Liminar / Redução (Parc. {parc_lim_sel}): R$ {vlr_lim_comb:,.2f}")
+                        if comb_exit:
+                            exec_db(
+                                "UPDATE contratos SET exito_pago=1, exito_data_pagamento=%s, exito_valor_recebido=%s WHERE id=%s",
+                                (data_comb.strftime("%Y-%m-%d"), vlr_exit_comb, int(id_sel))
+                            )
+                            linhas_recibo.append(f"🏆 Êxito: R$ {vlr_exit_comb:,.2f}")
+                        if comb_ini:
+                            exec_db("UPDATE contratos SET saldo_devedor=%s WHERE id=%s",
+                                    (max(novo_saldo_c, 0), int(id_sel)))
+                            if novo_saldo_c <= 0:
+                                exec_db("UPDATE contratos SET observacoes='Pago' WHERE id=%s", (int(id_sel),))
+                                st.balloons()
+                        linhas_recibo += [
+                            f"---------------------------------------",
+                            f"*Total Recebido:* R$ {total_comb:,.2f}",
+                        ]
+                        if comb_ini:
+                            linhas_recibo.append(f"*Saldo Devedor Restante:* R$ {max(novo_saldo_c, 0):,.2f}")
+                        linhas_recibo.append("---------------------------------------\nObrigado pela confiança!")
+                        st.session_state['ultimo_recibo'] = "\n".join(linhas_recibo)
+                        st.session_state['tel_cliente']   = str(resumo['telefone'])
+                        st.rerun()
  
 # --- MEUS CONTRATOS ---
 elif aba == "📂 Meus Contratos":
@@ -783,57 +1020,92 @@ elif aba == "📂 Meus Contratos":
         with st.expander("✏️ Editar Contrato", expanded=False):
             st.subheader("Dados Gerais")
             col_e1, col_e2 = st.columns(2)
-            ed_nome   = col_e1.text_input("Nome do Cliente",  value=str(c['cliente']),  key="ed_nome")
-            ed_cpf    = col_e2.text_input("CPF / CNPJ",       value=str(c['cpf_cnpj'] or ''), key="ed_cpf")
-            ed_tel    = col_e1.text_input("Telefone",          value=str(c['telefone'] or ''),  key="ed_tel")
-            ed_obs    = col_e2.text_area("Observações",        value=str(c['observacoes'] or ''), key="ed_obs")
+            ed_nome   = col_e1.text_input("Nome do Cliente",  value=str(c['cliente']),          key=f"ed_nome_{id_mc}")
+            ed_cpf    = col_e2.text_input("CPF / CNPJ",       value=str(c['cpf_cnpj'] or ''),   key=f"ed_cpf_{id_mc}")
+            ed_tel    = col_e1.text_input("Telefone",          value=str(c['telefone'] or ''),   key=f"ed_tel_{id_mc}")
+            ed_obs    = col_e2.text_area("Observações",        value=str(c['observacoes'] or ''), key=f"ed_obs_{id_mc}")
+
+            st.subheader("💰 Honorários Iniciais")
+            col_hi1, col_hi2 = st.columns(2)
+            ed_hi_ativo = col_hi1.selectbox("Há cobrança inicial?", ["Não", "Sim"],
+                                             index=0 if str(c.get('hon_inicial_ativo') or 'Não') == 'Não' else 1,
+                                             key=f"ed_hi_ativo_{id_mc}")
+            ed_hi_valor = col_hi2.number_input("Valor Total dos Honorários Iniciais (R$)",
+                                                min_value=0.0, step=100.0, format="%.2f",
+                                                value=float(c.get('hon_inicial_valor') or 0),
+                                                key=f"ed_hi_valor_{id_mc}")
+            col_hi3, col_hi4 = st.columns(2)
+            ed_hi_parc = col_hi3.selectbox("Pagamento parcelado?", ["Não", "Sim"],
+                                            index=0 if str(c.get('hon_inicial_parcelado') or 'Não') == 'Não' else 1,
+                                            key=f"ed_hi_parc_{id_mc}")
+            ed_hi_qtd  = col_hi4.number_input("Nº de Parcelas",
+                                               min_value=1, max_value=60, step=1,
+                                               value=int(c.get('hon_inicial_parcelas') or 1),
+                                               key=f"ed_hi_qtd_{id_mc}")
+            col_hi5, col_hi6 = st.columns(2)
+            ed_valor_total = col_hi5.number_input("Valor Total do Contrato (R$)",
+                                                   min_value=0.0, step=100.0, format="%.2f",
+                                                   value=float(c['valor_total']),
+                                                   key=f"ed_vt_{id_mc}")
+            ed_saldo_dev   = col_hi6.number_input("Saldo Devedor Atual (R$)",
+                                                   min_value=0.0, step=100.0, format="%.2f",
+                                                   value=float(c['saldo_devedor']),
+                                                   key=f"ed_sd_{id_mc}")
 
             st.subheader("⚖️ Honorários da Liminar")
             col_e3, col_e4 = st.columns(2)
             tutela_opts  = ["Pendente", "Deferido", "Indeferido", "Parcial"]
             tutela_idx   = tutela_opts.index(tutela_atual) if tutela_atual in tutela_opts else 0
             ed_tutela    = col_e3.selectbox("Status da Tutela", tutela_opts,
-                                             index=tutela_idx, key="ed_tutela")
+                                             index=tutela_idx, key=f"ed_tutela_{id_mc}")
             ed_lim_fixo  = col_e4.number_input("Honorários Fixos da Liminar (R$)",
                                                 min_value=0.0, step=100.0, format="%.2f",
                                                 value=float(c.get('hon_liminar_fixo') or 0),
-                                                key="ed_lim_fixo")
+                                                key=f"ed_lim_fixo_{id_mc}")
             col_e5, col_e6 = st.columns(2)
             ed_red_vlr   = col_e5.number_input("Valor da Redução Obtida (R$)",
                                                 min_value=0.0, step=100.0, format="%.2f",
                                                 value=float(c.get('hon_liminar_reducao_vlr') or 0),
-                                                key="ed_red_vlr")
+                                                key=f"ed_red_vlr_{id_mc}")
             ed_red_prc   = col_e6.number_input("Nº de Parcelas da Redução",
                                                 min_value=0, max_value=360, step=1,
                                                 value=int(c.get('hon_liminar_reducao_prc') or 0),
-                                                key="ed_red_prc")
+                                                key=f"ed_red_prc_{id_mc}")
 
             st.subheader("🏆 Honorários de Êxito")
             col_e7, col_e8 = st.columns(2)
             ed_exito_pct  = col_e7.number_input("Percentual de Êxito (%)",
                                                   min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
                                                   value=float(c.get('hon_exito_percentual') or 0),
-                                                  key="ed_exito_pct")
+                                                  key=f"ed_exito_pct_{id_mc}")
             ed_exito_fixo = col_e8.number_input("Valor Fixo de Êxito (R$)",
                                                   min_value=0.0, step=100.0, format="%.2f",
                                                   value=float(c.get('hon_exito_fixo') or 0),
-                                                  key="ed_exito_fixo")
+                                                  key=f"ed_exito_fixo_{id_mc}")
 
             st.subheader("📁 Dados do Processo")
             col_e9, col_e10 = st.columns(2)
-            ed_proc  = col_e9.text_input("Número do Processo", value=str(c.get('nr_processo') or ''),  key="ed_proc")
-            ed_vara  = col_e10.text_input("Número da Vara",    value=str(c.get('nr_vara')    or ''),  key="ed_vara")
+            ed_proc  = col_e9.text_input("Número do Processo",  value=str(c.get('nr_processo') or ''), key=f"ed_proc_{id_mc}")
+            ed_vara  = col_e10.text_input("Número da Vara",     value=str(c.get('nr_vara')    or ''), key=f"ed_vara_{id_mc}")
             col_e11, col_e12 = st.columns(2)
-            ed_juiz  = col_e11.text_input("Nome do Juiz",       value=str(c.get('nome_juiz')  or ''), key="ed_juiz")
-            ed_com   = col_e12.text_input("Comarca",            value=str(c.get('comarca')    or ''), key="ed_com")
+            ed_juiz  = col_e11.text_input("Nome do Juiz",        value=str(c.get('nome_juiz')  or ''), key=f"ed_juiz_{id_mc}")
+            ed_com   = col_e12.text_input("Comarca",             value=str(c.get('comarca')    or ''), key=f"ed_com_{id_mc}")
 
-            if st.button("💾 Salvar Alterações", type="primary", key="btn_salvar_edicao"):
+            if st.button("💾 Salvar Alterações", type="primary", key=f"btn_salvar_edicao_{id_mc}"):
+                vlr_parc_novo = round(ed_hi_valor / ed_hi_qtd, 2) if ed_hi_qtd > 0 and ed_hi_valor > 0 else 0.0
                 exec_db("""
                     UPDATE contratos SET
                         cliente                 = %s,
                         cpf_cnpj                = %s,
                         telefone                = %s,
                         observacoes             = %s,
+                        valor_total             = %s,
+                        saldo_devedor           = %s,
+                        hon_inicial_ativo       = %s,
+                        hon_inicial_valor       = %s,
+                        hon_inicial_parcelado   = %s,
+                        hon_inicial_parcelas    = %s,
+                        hon_inicial_vlr_parcela = %s,
                         tutela                  = %s,
                         hon_liminar_fixo        = %s,
                         hon_liminar_reducao_vlr = %s,
@@ -850,10 +1122,17 @@ elif aba == "📂 Meus Contratos":
                     formatar_cpf_cnpj(re.sub(r'\D', '', ed_cpf)),
                     formatar_telefone(re.sub(r'\D', '', ed_tel)),
                     ed_obs.strip() or None,
+                    ed_valor_total,
+                    ed_saldo_dev,
+                    ed_hi_ativo,
+                    ed_hi_valor   or None,
+                    ed_hi_parc,
+                    ed_hi_qtd     or None,
+                    vlr_parc_novo or None,
                     ed_tutela,
-                    ed_lim_fixo  or None,
-                    ed_red_vlr   or None,
-                    ed_red_prc   or None,
+                    ed_lim_fixo   or None,
+                    ed_red_vlr    or None,
+                    ed_red_prc    or None,
                     ed_exito_pct  or None,
                     ed_exito_fixo or None,
                     ed_proc.strip()  or None,
