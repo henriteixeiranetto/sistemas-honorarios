@@ -55,14 +55,11 @@ def get_conn():
 def _conn():
     cache = get_conn()
     conn = cache["conn"]
-    # Verifica se a conexão foi fechada pelo atributo nativo do psycopg2
     if conn.closed != 0:
         cache["conn"] = criar_conexao()
     else:
-        # Tenta um ping real para confirmar que está viva
         try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
+            conn.cursor().close()
         except Exception:
             try:
                 conn.close()
