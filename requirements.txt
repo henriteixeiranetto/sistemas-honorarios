@@ -4,3 +4,4 @@ psycopg2-binary
 sqlalchemy
 fpdf2
 openpyxl
+apscheduler
