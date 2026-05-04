@@ -8,6 +8,7 @@ import io
 import urllib.parse
 import re
 from fpdf import FPDF
+from apscheduler.schedulers.background import BackgroundScheduler
  
 # =============================================================================
 # 1. CONFIGURAÇÕES E ESTILO
@@ -25,7 +26,35 @@ st.markdown("""
 """, unsafe_allow_html=True)
  
 # =============================================================================
-# 2. CONEXÃO COM SUPABASE (PostgreSQL)
+# 2. KEEP-ALIVE — Evita que o Supabase durma por inatividade
+# =============================================================================
+def _keep_supabase_alive():
+    try:
+        import os
+        host     = os.environ.get("SUPABASE_HOST")     or st.secrets["supabase"]["host"]
+        port     = os.environ.get("SUPABASE_PORT")     or st.secrets["supabase"]["port"]
+        dbname   = os.environ.get("SUPABASE_DBNAME")   or st.secrets["supabase"]["dbname"]
+        user     = os.environ.get("SUPABASE_USER")     or st.secrets["supabase"]["user"]
+        password = os.environ.get("SUPABASE_PASSWORD") or st.secrets["supabase"]["password"]
+        conn = psycopg2.connect(
+            host=host, port=port, dbname=dbname,
+            user=user, password=password,
+            sslmode="require", connect_timeout=10
+        )
+        conn.cursor().execute("SELECT 1")
+        conn.close()
+        print("[keep-alive] ping Supabase OK")
+    except Exception as e:
+        print(f"[keep-alive] erro: {e}")
+
+if "scheduler_started" not in st.session_state:
+    _scheduler = BackgroundScheduler()
+    _scheduler.add_job(_keep_supabase_alive, "interval", hours=6)
+    _scheduler.start()
+    st.session_state["scheduler_started"] = True
+
+# =============================================================================
+# 3. CONEXÃO COM SUPABASE (PostgreSQL)
 # =============================================================================
 def criar_conexao():
     import os
@@ -107,7 +136,7 @@ def select_db(query, params=()):
         return pd.DataFrame()
  
 # =============================================================================
-# 3. BANCO DE DADOS — INICIALIZAÇÃO
+# 4. BANCO DE DADOS — INICIALIZAÇÃO
 # =============================================================================
 def inicializar_banco():
     # Tabela principal de contratos
