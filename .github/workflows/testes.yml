@@ -17,9 +17,18 @@ jobs:
         # O requirements.txt aceita pandas 2 e 3; o Railway pode instalar
         # qualquer uma das duas, então as duas precisam passar.
         include:
-          - rotulo: "pandas 2.x"
+          # 3.11 é o que o Railway/nixpacks costuma usar em produção.
+          - rotulo: "py3.11 · pandas 2.x"
+            python: "3.11"
             spec: "pandas>=2.2,<3"
-          - rotulo: "pandas 3.x"
+          - rotulo: "py3.11 · pandas 3.x"
+            python: "3.11"
+            spec: "pandas>=3,<4"
+          - rotulo: "py3.12 · pandas 2.x"
+            python: "3.12"
+            spec: "pandas>=2.2,<3"
+          - rotulo: "py3.12 · pandas 3.x"
+            python: "3.12"
             spec: "pandas>=3,<4"
 
     name: ${{ matrix.rotulo }}
@@ -29,7 +38,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "${{ matrix.python }}"
           cache: pip
 
       - name: Instalar dependências
