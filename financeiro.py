@@ -1366,25 +1366,33 @@ ORDER BY vencimento ASC
 
 SQL_RECEBIMENTOS_MES = """
 SELECT mes, SUM(total) AS total FROM (
-    SELECT LEFT(data_pagamento, 7) AS mes, SUM(valor_parcela) AS total
+    SELECT LEFT(data_pagamento::text, 7) AS mes, SUM(valor_parcela) AS total
     FROM parcelas
-    WHERE pago = 1 AND data_pagamento IS NOT NULL AND data_pagamento <> ''
+    WHERE pago = 1 AND data_pagamento IS NOT NULL AND data_pagamento::text <> ''
     GROUP BY 1
     UNION ALL
-    SELECT LEFT(data_pagamento, 7), SUM(valor_parcela)
+    SELECT LEFT(data_pagamento::text, 7), SUM(valor_parcela)
     FROM parcelas_liminar
-    WHERE pago = 1 AND data_pagamento IS NOT NULL AND data_pagamento <> ''
+    WHERE pago = 1 AND data_pagamento IS NOT NULL AND data_pagamento::text <> ''
     GROUP BY 1
     UNION ALL
-    SELECT LEFT(exito_data_pagamento, 7), SUM(exito_valor_recebido)
+    SELECT LEFT(exito_data_pagamento::text, 7), SUM(exito_valor_recebido)
     FROM contratos
     WHERE COALESCE(exito_pago, 0) = 1
-      AND exito_data_pagamento IS NOT NULL AND exito_data_pagamento <> ''
+      AND exito_data_pagamento IS NOT NULL AND exito_data_pagamento::text <> ''
     GROUP BY 1
 ) t
 WHERE mes IS NOT NULL AND mes <> ''
 GROUP BY mes
 ORDER BY mes
+"""
+
+SQL_ESTRUTURA = """
+SELECT table_name, column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name IN ('contratos', 'parcelas', 'parcelas_liminar')
+ORDER BY table_name, ordinal_position
 """
 
 SQL_INSERT_CONTRATO = """
@@ -1539,7 +1547,11 @@ def _bloco_proximos_vencimentos(dias: int = 15) -> None:
 def _grafico_recebimentos() -> None:
     try:
         df = select_db(SQL_RECEBIMENTOS_MES)
-    except ErroBanco:
+    except ErroBanco as erro:
+        # Antes esta falha era engolida em silêncio: o gráfico simplesmente
+        # não aparecia e não havia como saber por quê.
+        st.divider()
+        st.caption(f"📈 Gráfico de recebimentos indisponível: {str(erro).strip()[:180]}")
         return
     if df.empty:
         return
@@ -2696,7 +2708,7 @@ def pagina_arquivados() -> None:
     df = select_db(
         """
         SELECT c.cliente, c.cpf_cnpj, c.telefone, c.valor_total, c.data_contrato,
-               COALESCE(c.quitado_em, MAX(p.data_pagamento)) AS data_quitacao,
+               COALESCE(c.quitado_em::text, MAX(p.data_pagamento)::text) AS data_quitacao,
                c.observacoes
         FROM contratos c
         LEFT JOIN parcelas p ON c.id = p.contrato_id
@@ -2816,6 +2828,25 @@ def pagina_gestao() -> None:
             }
         )
         st.caption(f"Servidor: {escalar('SELECT version()', padrao='—')}")
+
+        # O tipo real das colunas nem sempre bate com o que o CREATE TABLE do
+        # código declara: o DDL só vale para tabela nova, então uma coluna
+        # alterada à mão no Supabase fica invisível até quebrar uma consulta.
+        with st.expander("🧬 Estrutura real das tabelas", expanded=False):
+            st.caption(
+                "Tipos como estão no banco agora. Útil quando uma consulta falha "
+                "com erro de tipo — foi assim que apareceu o `timestamp` onde o "
+                "código esperava `text`."
+            )
+            try:
+                estrutura = select_db(SQL_ESTRUTURA, cache=False)
+                if estrutura.empty:
+                    st.info("Nenhuma das três tabelas foi encontrada no schema `public`.")
+                else:
+                    estrutura.columns = ["Tabela", "Coluna", "Tipo", "Aceita nulo", "Padrão"]
+                    tabela(estrutura, altura=420)
+            except ErroBanco as erro:
+                st.error(f"Não foi possível ler a estrutura: {erro}")
 
         if st.button("♻️ Limpar todo o cache de consultas"):
             st.cache_data.clear()

@@ -131,7 +131,7 @@ BEGIN;
 UPDATE contratos c
    SET quitado_em = COALESCE(
         c.quitado_em,
-        (SELECT LEFT(MAX(p.data_pagamento), 10)
+        (SELECT LEFT(MAX(p.data_pagamento)::text, 10)
            FROM parcelas p
           WHERE p.contrato_id = c.id AND p.pago = 1)
    )
