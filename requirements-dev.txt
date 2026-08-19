@@ -1,0 +1,4 @@
+# Dependencias apenas para rodar os testes (nao vao para producao).
+-r requirements.txt
+pglast>=7,<9
+pyflakes>=3
