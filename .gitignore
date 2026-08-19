@@ -1,0 +1,22 @@
+# Credenciais — NUNCA versionar (este repositorio e publico)
+.streamlit/secrets.toml
+.env
+*.env
+
+# Backups e relatorios gerados pelo sistema
+backup_honorarios_*.xlsx
+contratos_*.xlsx
+contratos_*.pdf
+recibo_*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

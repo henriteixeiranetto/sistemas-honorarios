@@ -1,2 +1,21 @@
 [runner]
 magicEnabled = false
+
+[server]
+headless = true
+enableXsrfProtection = true
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#1E4DD8"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6FB"
+textColor = "#1B1F27"
+
+[client]
+# Nao vazar stack trace do Python para a tela do usuario em producao.
+showErrorDetails = false

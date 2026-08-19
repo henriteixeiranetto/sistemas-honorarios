@@ -1,7 +1,8 @@
-streamlit
-pandas
-psycopg2-binary
-sqlalchemy
-fpdf2
-openpyxl
-apscheduler
+# Faixas validadas em teste: streamlit 1.61, pandas 2.3.3 e 3.0.5.
+streamlit>=1.32,<2
+pandas>=2.2,<4
+psycopg2-binary>=2.9.9,<3
+openpyxl>=3.1,<4
+fpdf2>=2.7,<3
+APScheduler>=3.10,<4
+tzdata>=2024.1
