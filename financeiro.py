@@ -25,15 +25,18 @@ from __future__ import annotations
 # 1. IMPORTS E CONSTANTES
 # =============================================================================
 import atexit
+import base64
 import hmac
 import io
 import os
+import pathlib
 import re
 import urllib.parse
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Sequence
 
+import altair as alt
 import pandas as pd
 import psycopg2
 import psycopg2.extensions
@@ -70,6 +73,7 @@ except Exception:  # pragma: no cover - fallback se o tzdata não existir
 
 APP_TITULO = "Sistema de Honorários"
 APP_ICONE = "⚖️"
+ESCRITORIO = "Maciel Freitas Advocacia"
 
 MENU = [
     "📊 Dashboard",
@@ -79,6 +83,23 @@ MENU = [
     "📁 Arquivados",
     "⚙️ Gestão",
 ]
+
+# Data no padrão brasileiro (dia primeiro), definida num lugar só.
+# Para trocar a barra por hífen em todo o sistema, basta alterar estas duas
+# linhas de forma coerente: "%d-%m-%Y" e "DD-MM-YYYY".
+FORMATO_DATA = "%d/%m/%Y"
+FORMATO_DATA_WIDGET = "DD/MM/YYYY"
+
+# Locale do Vega: faz o eixo e as dicas do gráfico saírem em pt-BR
+# ("R$ 15.000" em vez de "$15,000").
+LOCALE_VEGA = {
+    "number": {
+        "decimal": ",",
+        "thousands": ".",
+        "grouping": [3],
+        "currency": ["R$ ", ""],
+    }
+}
 
 FORMAS_PAGAMENTO = ["Pix", "Dinheiro", "Transferência", "Cartão", "Boleto"]
 STATUS_TUTELA = ["Pendente", "Deferido", "Indeferido", "Parcial"]
@@ -121,38 +142,140 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Cores em rgba neutro para o layout funcionar tanto no tema claro quanto no
-# escuro do Streamlit (o CSS anterior fixava cinza claro e sumia no dark mode).
+# Paleta e tipografia do escritório (gmfreitas.com.br). O tema base vem do
+# .streamlit/config.toml; aqui vai o que o config não alcança.
 st.markdown(
     """
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
     <style>
-        [data-testid="stMetric"] {
-            background: rgba(127, 127, 127, .08);
-            border: 1px solid rgba(127, 127, 127, .22);
-            border-radius: 12px;
-            padding: 14px 16px;
-        }
-        [data-testid="stMetricLabel"] p { font-size: .82rem; opacity: .85; }
-        [data-testid="stMetricValue"] { font-size: 1.45rem; }
+        :root {
+            --teal:        #035E70;
+            --teal-escuro: #024250;
+            --teal-tinta:  #012B34;
+            --teal-claro:  #0A7F95;
+            --teal-suave:  #E7F0F1;
+            --tinta:       #1C2A2E;
+            --tinta-suave: #43545A;
+            --cinza:       #8B9296;
+            --creme:       #F7F5F0;
+            --papel:       #FBFAF7;
+            --linha:       rgba(3, 94, 112, .16);
+            --sombra:      0 2px 14px rgba(2, 43, 52, .06);
 
-        button[kind="primary"] { width: 100%; height: 3em; font-weight: 600; }
+            --ok:      #10603F;  --ok-fundo:      #E2F2EA;
+            --alerta:  #8A5A00;  --alerta-fundo:  #FBF1D8;
+            --critico: #A8201A;  --critico-fundo: #FBE9E7;
+        }
+
+        /* Largura contida: a tabela deixa de se esticar de ponta a ponta num
+           monitor grande, que era o que mais atrapalhava a leitura. */
+        .block-container {
+            max-width: 1240px;
+            padding-top: 1.4rem;
+            padding-bottom: 4rem;
+        }
+
+        html, body, [class*="css"] { font-family: "Source Serif 4", Georgia, serif; }
+        h1, h2, h3, h4 {
+            font-family: "Fraunces", Georgia, serif !important;
+            color: var(--teal-tinta);
+            letter-spacing: -.01em;
+        }
+        h1 { font-size: 1.9rem !important; }
+        h2 { font-size: 1.42rem !important; }
+        h3 { font-size: 1.12rem !important; }
+
+        /* Cabeçalho da marca */
+        .marca {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 4px 0 14px;
+            border-bottom: 2px solid var(--teal);
+            margin-bottom: 22px;
+            flex-wrap: wrap;
+        }
+        .marca img { height: 38px; width: auto; }
+        .marca-titulo {
+            font-family: "Fraunces", Georgia, serif;
+            font-size: 1.02rem;
+            color: var(--teal-escuro);
+            text-align: right;
+            line-height: 1.35;
+        }
+        .marca-titulo small {
+            display: block;
+            font-family: "Source Serif 4", Georgia, serif;
+            font-size: .78rem;
+            color: var(--cinza);
+        }
+
+        /* Indicadores: mais baixos e mais densos que o padrão do Streamlit,
+           que gastava um terço da tela em três números. */
+        [data-testid="stMetric"] {
+            background: #FFFFFF;
+            border: 1px solid var(--linha);
+            border-radius: 12px;
+            padding: 12px 16px;
+            box-shadow: var(--sombra);
+        }
+        [data-testid="stMetricLabel"] p {
+            font-size: .76rem !important;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            color: var(--cinza) !important;
+        }
+        [data-testid="stMetricValue"] {
+            font-family: "Fraunces", Georgia, serif;
+            font-size: 1.42rem !important;
+            color: var(--teal-tinta);
+            font-variant-numeric: tabular-nums;
+        }
+
+        button[kind="primary"] { width: 100%; height: 3em; font-weight: 600; letter-spacing: .01em; }
+        button[kind="secondary"] { border-color: var(--linha); }
 
         .caixa {
-            background: rgba(127, 127, 127, .08);
-            border: 1px solid rgba(127, 127, 127, .18);
-            border-left: 5px solid var(--realce, #2563eb);
+            background: #FFFFFF;
+            border: 1px solid var(--linha);
+            border-left: 4px solid var(--realce, var(--teal));
             border-radius: 10px;
-            padding: 14px 16px;
+            padding: 14px 18px;
             margin-bottom: 14px;
-            line-height: 1.6;
+            line-height: 1.65;
+            box-shadow: var(--sombra);
         }
-        .caixa-cliente { --realce: #2563eb; }
-        .caixa-nota    { --realce: #f59e0b; }
-        .caixa-ok      { --realce: #16a34a; }
+        .caixa-cliente { --realce: var(--teal); }
+        .caixa-nota    { --realce: #C08A2E; background: #FDFBF5; }
+        .caixa-ok      { --realce: var(--ok); }
 
-        section[data-testid="stSidebar"] { border-right: 1px solid rgba(127,127,127,.2); }
-        div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
-        .block-container { padding-top: 2.2rem; }
+
+        section[data-testid="stSidebar"] {
+            background: var(--creme);
+            border-right: 1px solid var(--linha);
+        }
+        section[data-testid="stSidebar"] img { max-width: 100%; }
+
+        div[data-testid="stDataFrame"] {
+            border: 1px solid var(--linha);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        div[data-testid="stExpander"] {
+            border: 1px solid var(--linha);
+            border-radius: 10px;
+            background: #FFFFFF;
+        }
+
+        hr { border-color: var(--linha) !important; }
+
+        /* Some com a barra do Streamlit para o sistema parecer um produto,
+           não um script publicado. */
+        #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; height: 0; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -666,12 +789,13 @@ def formatar_telefone(valor: Any) -> str:
 
 
 def formatar_data(valor: Any) -> str:
+    """Data para exibição, no padrão brasileiro (dia primeiro)."""
     if nulo(valor):
         return "-"
     texto = str(valor).strip()
     for tamanho, entrada, saida in (
-        (19, "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M"),
-        (10, "%Y-%m-%d", "%d/%m/%Y"),
+        (19, "%Y-%m-%d %H:%M:%S", f"{FORMATO_DATA} %H:%M"),
+        (10, "%Y-%m-%d", FORMATO_DATA),
     ):
         if len(texto) >= tamanho:
             try:
@@ -682,10 +806,80 @@ def formatar_data(valor: Any) -> str:
 
 
 def moeda(valor: Any) -> str:
+    """Valor em real no padrão brasileiro: R$ 15.100,00.
+
+    O format do Python só produz separador americano ("15,100.00"). O `locale`
+    do sistema não é confiável em contêiner (o Railway pode não ter pt_BR
+    instalado), então a troca é feita à mão: vira R$ 15.100,00 em qualquer
+    servidor, sem depender de nada instalado.
+    """
     try:
-        return f"R$ {float(valor):,.2f}"
+        bruto = f"{float(valor):,.2f}"
     except (TypeError, ValueError):
         return "R$ 0,00"
+    return "R$ " + bruto.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+def numero_br(valor: Any, casas: int = 2) -> str:
+    """Número sem o símbolo da moeda, também no padrão brasileiro."""
+    try:
+        bruto = f"{float(valor):,.{casas}f}"
+    except (TypeError, ValueError):
+        return "0"
+    return bruto.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+def _cor_situacao(valor: Any) -> str:
+    """CSS de fundo/texto para a célula de situação."""
+    texto = str(valor)
+    if "Atrasado" in texto:
+        return "background-color:#FBE9E7;color:#A8201A;font-weight:600"
+    if "Pendente" in texto:
+        return "background-color:#FBF1D8;color:#8A5A00;font-weight:600"
+    if "Pago" in texto or "Recebido" in texto:
+        return "background-color:#E2F2EA;color:#10603F;font-weight:600"
+    return ""
+
+
+def tabela(
+    df: pd.DataFrame,
+    colunas_moeda: Sequence[str] = (),
+    *,
+    altura: int | None = None,
+    ordem: Sequence[str] | None = None,
+    coluna_situacao: str | None = None,
+) -> None:
+    """Exibe um DataFrame com moeda em pt-BR e ordenação preservada.
+
+    O `column_config` do Streamlit só formata número com separador americano,
+    e o modo "localized" depende do idioma do navegador de quem abre (num
+    navegador em inglês sairia "15,100"). O Styler resolve os dois problemas:
+    a formatação acontece aqui no Python, e o valor por baixo continua
+    numérico — então clicar no cabeçalho ainda ordena por valor, não por texto.
+    """
+    if df.empty:
+        st.caption("Nada a exibir.")
+        return
+
+    visao = df[list(ordem)] if ordem else df
+    presentes = [c for c in colunas_moeda if c in visao.columns]
+    estilo = visao.style.format({coluna: moeda for coluna in presentes})
+
+    # Situação ganha cor de fundo: o estado é lido de relance, sem depender de
+    # interpretar a bolinha do emoji. O Styler pinta a célula sem precisar de
+    # HTML, que o st.dataframe não renderiza.
+    if coluna_situacao and coluna_situacao in visao.columns:
+        estilo = estilo.map(_cor_situacao, subset=[coluna_situacao])
+
+    # `height` precisa ser omitido quando não definido: passar None explícito
+    # levanta StreamlitInvalidHeightError.
+    extras = {"height": altura} if altura else {}
+    st.dataframe(estilo, use_container_width=True, hide_index=True, **extras)
+
+
+def porcentagem(fracao: float, casas: int = 1) -> str:
+    """Percentual em pt-BR: 47,0% (o format do Python daria 47.0%)."""
+    return numero_br(fracao * 100, casas) + "%"
 
 
 def numerico(df: pd.DataFrame, *colunas: str) -> pd.DataFrame:
@@ -761,6 +955,34 @@ def caixa(html: str, classe: str = "caixa-cliente") -> None:
     st.markdown(f"<div class='caixa {classe}'>{html}</div>", unsafe_allow_html=True)
 
 
+@st.cache_resource(show_spinner=False)
+def _logo_embutido(nome: str) -> str | None:
+    """Logotipo como data URI.
+
+    Embutido em base64 porque o HTML injetado no Streamlit não enxerga
+    arquivos locais, e depender do site do escritório deixaria o cabeçalho
+    quebrado sempre que ele saísse do ar.
+    """
+    caminho = pathlib.Path(__file__).resolve().parent / "assets" / nome
+    if not caminho.exists():
+        return None
+    return base64.b64encode(caminho.read_bytes()).decode("ascii")
+
+
+def cabecalho_marca(subtitulo: str = "") -> None:
+    logo = _logo_embutido("logo-color-horizontal.png")
+    if logo:
+        imagem = f"<img src='data:image/png;base64,{logo}' alt='{ESCRITORIO}'>"
+    else:
+        imagem = f"<span class='marca-titulo'>{ESCRITORIO}</span>"
+    direita = (
+        f"<div class='marca-titulo'>{APP_TITULO}<small>{subtitulo}</small></div>"
+        if subtitulo
+        else f"<div class='marca-titulo'>{APP_TITULO}</div>"
+    )
+    st.markdown(f"<div class='marca'>{imagem}{direita}</div>", unsafe_allow_html=True)
+
+
 def linha_processo(registro: Any) -> str:
     partes = []
     for campo, rotulo in (
@@ -833,7 +1055,7 @@ if PDF_DISPONIVEL:
             self.set_font("Helvetica", "", 8)
             self.set_text_color(110, 110, 110)
             self.cell(
-                0, 5, f"Gerado em {agora():%d/%m/%Y %H:%M}",
+                0, 5, f"Gerado em {agora().strftime(FORMATO_DATA)} {agora():%H:%M}",
                 align="C", new_x="LMARGIN", new_y="NEXT",
             )
             self.ln(2)
@@ -892,7 +1114,7 @@ def gerar_pdf(df: pd.DataFrame, titulo: str) -> bytes:
             if nulo(item):
                 texto = "-"
             elif isinstance(item, (int, float)) and not isinstance(item, bool):
-                texto = f"R$ {item:,.2f}"
+                texto = moeda(item)
             else:
                 texto = _texto_pdf(item)
             while pdf.get_string_width(texto) > largura - 2 and len(texto) > 3:
@@ -948,7 +1170,7 @@ def montar_recibo(
         f"*Cliente:* {cliente}",
         f"*CPF/CNPJ:* {formatar_cpf_cnpj(documento)}",
     ]
-    cabecalho = f"*Data:* {data.strftime('%d/%m/%Y')}"
+    cabecalho = f"*Data:* {data.strftime(FORMATO_DATA)}"
     if metodo:
         cabecalho += f" | *Método:* {metodo}"
     linhas += [cabecalho, SEPARADOR_RECIBO, *itens, SEPARADOR_RECIBO]
@@ -1039,8 +1261,21 @@ def autenticar() -> bool:
 
     _, centro, _ = st.columns([1, 2, 1])
     with centro:
+        logo = _logo_embutido("logo-color-horizontal.png")
+        marca = (
+            f"<img src='data:image/png;base64,{logo}' alt='{ESCRITORIO}' "
+            "style='max-width:290px;width:100%;margin:0 auto 6px;display:block;'>"
+            if logo
+            else f"<div style='font-size:1.3rem;'>{ESCRITORIO}</div>"
+        )
         st.markdown(
-            f"<h2 style='text-align:center;'>{APP_ICONE} {APP_TITULO}</h2>",
+            f"""
+            <div style='text-align:center;padding:26px 0 20px;'>
+                {marca}
+                <div style='font-family:Fraunces,Georgia,serif;font-size:1.05rem;
+                            color:#035E70;letter-spacing:.03em;'>{APP_TITULO}</div>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
         restante = _bloqueio_ativo()
@@ -1232,15 +1467,7 @@ def pagina_dashboard() -> None:
             "Observações": df_ativos["observacoes"].apply(lambda v: "-" if nulo(v) else str(v)),
         }
     )
-    st.dataframe(
-        df_visao,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Valor Total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
-            "Saldo Pendente": st.column_config.NumberColumn("Pendente", format="R$ %.2f"),
-        },
-    )
+    tabela(df_visao, ["Valor Total", "Saldo Pendente"])
     st.divider()
     botoes_exportacao(df_visao, "contratos_ativos", "Relatório de Contratos Ativos")
     _grafico_recebimentos()
@@ -1282,12 +1509,7 @@ def _bloco_inadimplencia() -> None:
         "Cliente", "Telefone", "Parcelas Atrasadas",
         "Valor Atrasado", "Dias do Pior Atraso", "Origem",
     ]
-    st.dataframe(
-        resumo,
-        use_container_width=True,
-        hide_index=True,
-        column_config={"Valor Atrasado": st.column_config.NumberColumn(format="R$ %.2f")},
-    )
+    tabela(resumo, ["Valor Atrasado"])
     st.divider()
 
 
@@ -1310,12 +1532,7 @@ def _bloco_proximos_vencimentos(dias: int = 15) -> None:
                 "Vencimento": df["vencimento"].apply(formatar_data),
             }
         )
-        st.dataframe(
-            visao,
-            use_container_width=True,
-            hide_index=True,
-            column_config={"Valor": st.column_config.NumberColumn(format="R$ %.2f")},
-        )
+        tabela(visao, ["Valor"])
         st.caption(f"Total previsto: **{moeda(df['valor_parcela'].sum())}**")
 
 
@@ -1334,7 +1551,26 @@ def _grafico_recebimentos() -> None:
     )
     st.divider()
     st.subheader("📈 Recebimentos por Mês")
-    st.bar_chart(df.set_index("Mês")["total"], height=260, color="#1e4dd8")
+
+    # st.bar_chart rotula o eixo em formato americano ("15,000"). O Altair
+    # aceita o locale do Vega, então o eixo e a dica saem em pt-BR.
+    grafico = (
+        alt.Chart(df)
+        .mark_bar(color="#035E70", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+        .encode(
+            x=alt.X("Mês:N", title=None, sort=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("total:Q", title=None, axis=alt.Axis(format="$,.0f")),
+            tooltip=[
+                alt.Tooltip("Mês:N", title="Mês"),
+                alt.Tooltip("total:Q", title="Recebido", format="$,.2f"),
+            ],
+        )
+        .properties(height=260)
+        .configure(locale=LOCALE_VEGA)
+        .configure_axis(grid=True, gridColor="#E7F0F1", domainColor="#C9D6D8", labelColor="#43545A")
+        .configure_view(strokeWidth=0)
+    )
+    st.altair_chart(grafico, use_container_width=True)
     st.caption(f"Total recebido no período exibido: **{moeda(df['total'].sum())}**")
 
 
@@ -1347,7 +1583,7 @@ def pagina_novo_contrato() -> None:
     nome = col1.text_input("Nome do Cliente")
     documento = col2.text_input("CPF ou CNPJ (somente números)", placeholder="Ex: 00000000000")
     telefone = col1.text_input("Telefone (somente números)", placeholder="Ex: 11999998888")
-    data_contrato = col2.date_input("Data do Contrato", value=hoje())
+    data_contrato = col2.date_input("Data do Contrato", value=hoje(), format=FORMATO_DATA_WIDGET)
 
     st.divider()
 
@@ -1384,8 +1620,7 @@ def pagina_novo_contrato() -> None:
         else:
             col3.metric("Forma", "À vista")
         primeiro_vencimento = col4.date_input(
-            "Vencimento da 1ª Parcela", value=data_contrato, key="novo_ini_venc"
-        )
+            "Vencimento da 1ª Parcela", value=data_contrato, key="novo_ini_venc", format=FORMATO_DATA_WIDGET)
         col5.metric("Valor de Cada Parcela", moeda(ini_valor / max(quantidade, 1)))
 
     valor_parcela = round(ini_valor / quantidade, 2) if quantidade > 0 and ini_valor > 0 else 0.0
@@ -1509,7 +1744,10 @@ def pagina_pagamentos() -> None:
     st.header("Registrar Recebimento")
     painel_recibo()
 
-    mostrar_todos = st.checkbox("Mostrar todos os contratos (inclusive quitados)", value=False)
+    col_sel, col_todos = st.columns([3, 1])
+    with col_todos:
+        st.write("")
+        mostrar_todos = st.checkbox("Mostrar todos", value=False, help="Inclui contratos já quitados")
     consulta = (
         "SELECT * FROM contratos ORDER BY cliente ASC" if mostrar_todos else SQL_CONTRATOS_COM_PENDENCIA
     )
@@ -1533,27 +1771,31 @@ def pagina_pagamentos() -> None:
     if st.session_state.get("select_cliente") not in rotulos:
         st.session_state.pop("select_cliente", None)
 
-    rotulo_sel = st.selectbox("Selecione o Cliente", options=rotulos, key="select_cliente")
+    with col_sel:
+        rotulo_sel = st.selectbox("Selecione o Cliente", options=rotulos, key="select_cliente")
     contrato_id = mapa[rotulo_sel]
     contrato = df_contratos[df_contratos["id"] == contrato_id].iloc[0]
 
-    caixa(
-        f"<b>Dados do Cliente:</b><br>"
-        f"👤 {contrato['cliente']} &nbsp;|&nbsp; "
-        f"💳 {formatar_cpf_cnpj(contrato['cpf_cnpj'])} &nbsp;|&nbsp; "
-        f"📞 {formatar_telefone(contrato['telefone'])}"
-    )
-    processo = linha_processo(contrato)
-    if processo:
-        st.markdown(processo)
-
     valor_total = float(contrato["valor_total"])
     saldo = float(contrato["saldo_devedor"])
-    col1, col2 = st.columns(2)
-    col1.metric("Valor Total", moeda(valor_total))
-    col2.metric("Saldo Restante", moeda(saldo))
     progresso = max(0.0, min(1.0, (valor_total - saldo) / valor_total)) if valor_total > 0 else 0.0
-    st.progress(progresso, text=f"Progresso de Pagamento: {progresso:.1%}")
+
+    # Dados do cliente e situação lado a lado: antes eram quatro blocos
+    # empilhados que empurravam a ação para fora da tela.
+    col_dados, col_valores = st.columns([3, 2])
+    with col_dados:
+        processo = linha_processo(contrato)
+        caixa(
+            f"<b>{contrato['cliente']}</b><br>"
+            f"💳 {formatar_cpf_cnpj(contrato['cpf_cnpj'])} &nbsp;|&nbsp; "
+            f"📞 {formatar_telefone(contrato['telefone'])}"
+            + (f"<br><span style='font-size:.88rem;color:#43545A;'>{processo}</span>" if processo else "")
+        )
+    with col_valores:
+        m1, m2 = st.columns(2)
+        m1.metric("Valor Total", moeda(valor_total))
+        m2.metric("Saldo Restante", moeda(saldo))
+        st.progress(progresso, text=f"Pago: {porcentagem(progresso)}")
 
     if not nulo(contrato["observacoes"]):
         caixa(f"<b>Notas:</b> {contrato['observacoes']}", "caixa-nota")
@@ -1583,12 +1825,7 @@ def _tabela_parcelas(df: pd.DataFrame, coluna_data: str, rotulo_data: str) -> No
     )
     if "forma_pagamento" in df.columns:
         visao["Método"] = df["forma_pagamento"].apply(lambda v: "-" if nulo(v) else str(v))
-    st.dataframe(
-        visao,
-        use_container_width=True,
-        hide_index=True,
-        column_config={"Valor": st.column_config.NumberColumn(format="R$ %.2f")},
-    )
+    tabela(visao, ["Valor"], coluna_situacao="Status")
 
 
 def _tab_honorarios_iniciais(contrato_id: int, contrato: Any) -> None:
@@ -1601,29 +1838,40 @@ def _tab_honorarios_iniciais(contrato_id: int, contrato: Any) -> None:
 
     numerico(df, "pago", "valor_parcela")
     df["pago"] = df["pago"].astype(int)
-    _tabela_parcelas(df, "data_vencimento", "Vencimento")
 
     pendentes = df[df["pago"] == 0]
     if pendentes.empty:
         st.success("🎉 Todas as parcelas iniciais já foram pagas!")
+        _tabela_parcelas(df, "data_vencimento", "Vencimento")
         return
 
-    col1, col2 = st.columns(2)
-    opcoes = {
-        f"Parc {linha.nr_parcela} (Venc: {formatar_data(linha.data_vencimento)})": int(linha.nr_parcela)
-        for linha in pendentes.itertuples()
-    }
-    rotulo = col1.selectbox("Qual parcela pagar?", list(opcoes), key=f"ini_parc_{contrato_id}")
-    numero = opcoes[rotulo]
-    sugerido = float(pendentes[pendentes["nr_parcela"] == numero]["valor_parcela"].iloc[0])
-    valor_pago = col2.number_input(
-        "Valor Recebido (R$)", value=sugerido, min_value=0.0, format="%.2f", key=f"ini_vlr_{contrato_id}"
-    )
-    col3, col4 = st.columns(2)
-    forma = col3.selectbox("Método de Recebimento", FORMAS_PAGAMENTO, key=f"ini_forma_{contrato_id}")
-    data_pagamento = col4.date_input("Data do Recebimento", value=hoje(), key=f"ini_data_{contrato_id}")
+    # Formulário antes da tabela: a ação principal passa a caber na tela sem
+    # rolar. A lista completa fica logo abaixo, como consulta.
+    with st.container(border=True):
+        col1, col2 = st.columns(2)
+        opcoes = {
+            f"Parcela {linha.nr_parcela} — vence {formatar_data(linha.data_vencimento)}": int(linha.nr_parcela)
+            for linha in pendentes.itertuples()
+        }
+        rotulo = col1.selectbox("Qual parcela pagar?", list(opcoes), key=f"ini_parc_{contrato_id}")
+        numero = opcoes[rotulo]
+        sugerido = float(pendentes[pendentes["nr_parcela"] == numero]["valor_parcela"].iloc[0])
+        valor_pago = col2.number_input(
+            "Valor Recebido (R$)", value=sugerido, min_value=0.0, format="%.2f",
+            key=f"ini_vlr_{contrato_id}",
+        )
+        col3, col4 = st.columns(2)
+        forma = col3.selectbox("Método de Recebimento", FORMAS_PAGAMENTO, key=f"ini_forma_{contrato_id}")
+        data_pagamento = col4.date_input(
+            "Data do Recebimento", value=hoje(), key=f"ini_data_{contrato_id}",
+            format=FORMATO_DATA_WIDGET,
+        )
+        confirmar = st.button("Confirmar Pagamento", type="primary", key=f"ini_btn_{contrato_id}")
 
-    if not st.button("Confirmar Pagamento", type="primary", key=f"ini_btn_{contrato_id}"):
+    st.caption("Todas as parcelas deste contrato:")
+    _tabela_parcelas(df, "data_vencimento", "Vencimento")
+
+    if not confirmar:
         return
 
     novo_saldo, quitou = _baixar_parcela_inicial(contrato_id, numero, valor_pago, forma, data_pagamento)
@@ -1726,7 +1974,7 @@ def _tab_liminar(contrato_id: int, contrato: Any) -> None:
     valor_recebido = col2.number_input(
         "Valor Recebido (R$)", value=sugerido, min_value=0.0, format="%.2f", key=f"lim_vlr_{contrato_id}"
     )
-    data_recebimento = st.date_input("Data do Recebimento", value=hoje(), key=f"lim_data_{contrato_id}")
+    data_recebimento = st.date_input("Data do Recebimento", value=hoje(), key=f"lim_data_{contrato_id}", format=FORMATO_DATA_WIDGET)
 
     if not st.button("✅ Confirmar Recebimento", type="primary", key=f"lim_btn_{contrato_id}"):
         return
@@ -1787,7 +2035,7 @@ def _tab_exito(contrato_id: int, contrato: Any) -> None:
         return
 
     if percentual > 0:
-        st.info(f"Percentual de êxito acordado: **{percentual:.2f}%** sobre o valor da causa.")
+        st.info(f"Percentual de êxito acordado: **{numero_br(percentual)}%** sobre o valor da causa.")
     if fixo > 0:
         st.info(f"Valor fixo de êxito acordado: **{moeda(fixo)}**")
 
@@ -1798,7 +2046,7 @@ def _tab_exito(contrato_id: int, contrato: Any) -> None:
         value=fixo if fixo > 0 else 100.0,
         key=f"exit_vlr_{contrato_id}",
     )
-    data_recebimento = col2.date_input("Data do Recebimento", value=hoje(), key=f"exit_data_{contrato_id}")
+    data_recebimento = col2.date_input("Data do Recebimento", value=hoje(), key=f"exit_data_{contrato_id}", format=FORMATO_DATA_WIDGET)
 
     if not st.button("🏆 Confirmar Recebimento de Êxito", type="primary", key=f"exit_btn_{contrato_id}"):
         return
@@ -1895,7 +2143,7 @@ def _tab_combinado(contrato_id: int, contrato: Any, saldo: float) -> None:
         return
 
     forma = st.selectbox("Método de Recebimento", FORMAS_PAGAMENTO, key=f"comb_forma_{contrato_id}")
-    data_recebimento = st.date_input("Data do Recebimento", value=hoje(), key=f"comb_data_{contrato_id}")
+    data_recebimento = st.date_input("Data do Recebimento", value=hoje(), key=f"comb_data_{contrato_id}", format=FORMATO_DATA_WIDGET)
     total = valor_inicial + valor_liminar + valor_exito
     st.metric("Total a Registrar", moeda(total))
 
@@ -2236,7 +2484,7 @@ def _expander_parcelas_iniciais(contrato_id: int, contrato: Any) -> None:
             col3.metric("A Receber", moeda(total - pagas))
             st.progress(
                 float(pagas / total) if total > 0 else 0.0,
-                text=f"Progresso: {(pagas / total if total else 0):.1%} recebido",
+                text=f"Progresso: {porcentagem(pagas / total if total else 0)} recebido",
             )
             _tabela_parcelas(df, "data_vencimento", "Vencimento")
 
@@ -2273,8 +2521,7 @@ def _expander_parcelas_iniciais(contrato_id: int, contrato: Any) -> None:
             )
         )
         primeiro = col3.date_input(
-            "Vencimento da 1ª", value=hoje(), key=f"rec_venc_{contrato_id}"
-        )
+            "Vencimento da 1ª", value=hoje(), key=f"rec_venc_{contrato_id}", format=FORMATO_DATA_WIDGET)
         st.caption(f"Cada parcela ficará em **{moeda(novo_total / max(nova_qtd, 1))}**.")
 
         confirmar_recriar = st.checkbox(
@@ -2368,7 +2615,7 @@ def _expander_parcelas_liminar(contrato_id: int, contrato: Any, tutela: str) -> 
                     key=f"pl_qtd_{contrato_id}",
                 )
             )
-            inicio = col3.date_input("Data da 1ª Parcela", value=hoje(), key=f"pl_inicio_{contrato_id}")
+            inicio = col3.date_input("Data da 1ª Parcela", value=hoje(), key=f"pl_inicio_{contrato_id}", format=FORMATO_DATA_WIDGET)
             st.metric("Valor de Cada Parcela", moeda(total / max(quantidade, 1)))
 
             if st.button("📥 Criar Parcelas da Redução", type="primary", key=f"pl_btn_{contrato_id}"):
@@ -2398,7 +2645,7 @@ def _expander_parcelas_liminar(contrato_id: int, contrato: Any, tutela: str) -> 
         col2.metric("Já Recebido", moeda(recebido))
         col3.metric("A Receber", moeda(total - recebido))
         proporcao = float(recebido / total) if total > 0 else 0.0
-        st.progress(proporcao, text=f"Progresso: {proporcao:.1%} recebido")
+        st.progress(proporcao, text=f"Progresso: {porcentagem(proporcao)} recebido")
 
         _tabela_parcelas(df, "data_prevista", "Previsão")
 
@@ -2415,8 +2662,7 @@ def _expander_parcelas_liminar(contrato_id: int, contrato: Any, tutela: str) -> 
             }
             numero = opcoes[col_a.selectbox("Qual parcela recebeu?", list(opcoes), key=f"mc_lim_sel_{contrato_id}")]
             data_recebimento = col_b.date_input(
-                "Data do Recebimento", value=hoje(), key=f"mc_lim_data_{contrato_id}"
-            )
+                "Data do Recebimento", value=hoje(), key=f"mc_lim_data_{contrato_id}", format=FORMATO_DATA_WIDGET)
             # Aqui não há campo de valor: a baixa registra a parcela prevista.
             # Para receber valor diferente do previsto e emitir recibo, use
             # 💰 Pagamentos → aba Liminar / Redução.
@@ -2475,12 +2721,7 @@ def pagina_arquivados() -> None:
             "Observações": df["observacoes"].apply(lambda v: "-" if nulo(v) else str(v)),
         }
     )
-    st.dataframe(
-        visao,
-        use_container_width=True,
-        hide_index=True,
-        column_config={"Valor Total": st.column_config.NumberColumn("Valor Contrato", format="R$ %.2f")},
-    )
+    tabela(visao, ["Valor Total"])
     st.divider()
     botoes_exportacao(visao, "contratos_quitados", "Relatório de Contratos Quitados")
 
@@ -2598,7 +2839,23 @@ PAGINAS: dict[str, Callable[[], None]] = {
 
 def barra_lateral() -> str:
     with st.sidebar:
-        st.markdown(f"### {APP_ICONE} Honorários")
+        simbolo = _logo_embutido("symbol-color.png")
+        if simbolo:
+            st.markdown(
+                f"""
+                <div style='display:flex;align-items:center;gap:11px;padding:6px 0 14px;'>
+                    <img src='data:image/png;base64,{simbolo}' alt='' style='height:34px;'>
+                    <div style='font-family:Fraunces,Georgia,serif;line-height:1.25;'>
+                        <div style='font-size:.92rem;color:#012B34;'>Maciel Freitas</div>
+                        <div style='font-size:.7rem;color:#8B9296;letter-spacing:.08em;'>ADVOCACIA</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(f"### {APP_ICONE} Honorários")
+
         usuario = st.session_state.get("usuario")
         if usuario:
             st.caption(f"Conectado como **{usuario}**")
@@ -2613,7 +2870,7 @@ def barra_lateral() -> str:
         if st.button("🚪 Sair", use_container_width=True):
             st.session_state.clear()
             st.rerun()
-        st.caption(f"🕒 {agora():%d/%m/%Y %H:%M}")
+        st.caption(f"🕒 {agora().strftime(FORMATO_DATA)} {agora():%H:%M}")
     return aba
 
 
@@ -2646,6 +2903,7 @@ def main() -> None:
         st.session_state["rad_nav"] = MENU[0]
 
     aba = barra_lateral()
+    cabecalho_marca(aba.split(" ", 1)[-1])
     mostrar_flash()
 
     try:

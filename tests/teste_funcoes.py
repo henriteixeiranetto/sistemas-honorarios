@@ -49,6 +49,21 @@ r.checar("data NaT", fin.formatar_data("NaT"), "-")
 r.checar("data inválida", fin.formatar_data("xx"), "-")
 r.checar("nulo reconhece NaT", fin.nulo("NaT"), True)
 r.checar("nulo não confunde texto", fin.nulo("Pago"), False)
+
+# Regressão: o sistema exibia "R$ 15,100.00" (formato americano). Ponto no
+# milhar e vírgula no decimal — é o que um escritório brasileiro espera ler.
+r.checar("moeda: milhar", fin.moeda(15100), "R$ 15.100,00")
+r.checar("moeda: milhão", fin.moeda(1234567.89), "R$ 1.234.567,89")
+r.checar("moeda: centavos", fin.moeda(1625.5), "R$ 1.625,50")
+r.checar("moeda: zero", fin.moeda(0), "R$ 0,00")
+r.checar("moeda: negativo", fin.moeda(-300.25), "R$ -300,25")
+r.checar("moeda: texto inválido", fin.moeda("abc"), "R$ 0,00")
+r.checar("moeda: None", fin.moeda(None), "R$ 0,00")
+r.checar("número sem moeda", fin.numero_br(1234567.891), "1.234.567,89")
+r.checar("percentual pt-BR", fin.porcentagem(0.47), "47,0%")
+r.checar("percentual cheio", fin.porcentagem(1.0), "100,0%")
+r.verdadeiro("data exibida com o dia primeiro", fin.FORMATO_DATA.startswith("%d"))
+r.verdadeiro("calendário com o dia primeiro", fin.FORMATO_DATA_WIDGET.startswith("DD"))
 r.checar("telefone vazio vai NULL ao banco", fin.telefone_para_banco(""), None)
 r.checar("telefone '-' vai NULL ao banco", fin.telefone_para_banco("-"), None)
 

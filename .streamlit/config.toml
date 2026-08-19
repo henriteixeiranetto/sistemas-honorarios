@@ -9,12 +9,13 @@ maxUploadSize = 50
 [browser]
 gatherUsageStats = false
 
+# Paleta da marca Maciel Freitas Advocacia (extraida de gmfreitas.com.br).
 [theme]
-base = "light"
-primaryColor = "#1E4DD8"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F6FB"
-textColor = "#1B1F27"
+base                     = "light"
+primaryColor             = "#035E70"
+backgroundColor          = "#FBFAF7"
+secondaryBackgroundColor = "#F2EFE8"
+textColor                = "#1C2A2E"
 
 [client]
 # Nao vazar stack trace do Python para a tela do usuario em producao.
