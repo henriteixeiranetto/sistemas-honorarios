@@ -891,6 +891,24 @@ def tabela(
     st.dataframe(estilo, use_container_width=True, hide_index=True, **extras)
 
 
+def resumo_parcelamento(total: float, quantidade: int, rotulo: str = "Total") -> None:
+    """Mostra a conta por extenso: total, número de parcelas e valor de cada.
+
+    Antes aqui havia só um cartão grande com o valor de CADA parcela. O
+    escritório leu esse número como se fosse o valor total e reportou que o
+    sistema estava "dividindo" o valor cadastrado. O dado sempre esteve certo
+    — faltava a conta estar visível por inteiro.
+    """
+    quantidade = max(int(quantidade), 1)
+    if quantidade == 1:
+        st.info(f"**{rotulo}: {moeda(total)}** — pagamento à vista, em 1 parcela.")
+        return
+    st.info(
+        f"**{rotulo}: {moeda(total)}**  ÷  **{quantidade} parcelas**  "
+        f"=  **{moeda(total / quantidade)}** por parcela"
+    )
+
+
 def porcentagem(fracao: float, casas: int = 1) -> str:
     """Percentual em pt-BR: 47,0% (o format do Python daria 47.0%)."""
     return numero_br(fracao * 100, casas) + "%"
@@ -1726,7 +1744,8 @@ def pagina_novo_contrato() -> None:
             col3.metric("Forma", "À vista")
         primeiro_vencimento = col4.date_input(
             "Vencimento da 1ª Parcela", value=data_contrato, key="novo_ini_venc", format=FORMATO_DATA_WIDGET)
-        col5.metric("Valor de Cada Parcela", moeda(ini_valor / max(quantidade, 1)))
+        col5.write("")
+        resumo_parcelamento(ini_valor, quantidade, "Honorários iniciais")
 
     valor_parcela = round(ini_valor / quantidade, 2) if quantidade > 0 and ini_valor > 0 else 0.0
 
@@ -2721,7 +2740,7 @@ def _expander_parcelas_liminar(contrato_id: int, contrato: Any, tutela: str) -> 
                 )
             )
             inicio = col3.date_input("Data da 1ª Parcela", value=hoje(), key=f"pl_inicio_{contrato_id}", format=FORMATO_DATA_WIDGET)
-            st.metric("Valor de Cada Parcela", moeda(total / max(quantidade, 1)))
+            resumo_parcelamento(total, quantidade, "Total da redução")
 
             if st.button("📥 Criar Parcelas da Redução", type="primary", key=f"pl_btn_{contrato_id}"):
                 valores = dividir_parcelas(total, quantidade)
