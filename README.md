@@ -133,8 +133,9 @@ testar o caminho completo sem tocar nos contratos reais.
 
 ## Outros arquivos
 
-- **`migracoes.sql`** — melhorias opcionais de banco (valores em `NUMERIC`,
-  regras de integridade) e consultas de diagnóstico. Nada aqui é necessário
-  para o sistema funcionar. Faça backup antes de rodar.
+- **`migracoes.sql`** — consultas de diagnóstico, melhorias de banco e o
+  procedimento de **limpeza dos dados de teste** (bloco 6), para o dia em que
+  o sistema entrar em uso real. Cada bloco diz se já foi aplicado. Nada aqui é
+  necessário para o sistema funcionar no dia a dia.
 - **`keepalive.py`** e **`README-keepalive.md`** — como evitar que o Supabase
   pause o projeto por inatividade no plano gratuito.

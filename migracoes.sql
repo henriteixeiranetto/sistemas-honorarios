@@ -160,3 +160,53 @@ COMMIT;
 -- ALTER TABLE parcelas
 --     ALTER COLUMN data_vencimento TYPE DATE USING data_vencimento::date;
 -- -----------------------------------------------------------------------------
+
+
+-- =============================================================================
+-- 6) LIMPAR OS DADOS DE TESTE  — DESTRUTIVO E SEM VOLTA
+--
+-- Rode UMA VEZ, no dia em que o sistema deixar de ser teste e antes do
+-- primeiro contrato real ser cadastrado.
+--
+-- Depois que houver contrato de cliente no banco, NAO use este bloco: ele
+-- apaga tudo, sem distinguir teste de real.
+-- =============================================================================
+
+-- 6.1 Antes de apagar: veja o que existe hoje.
+SELECT 'contratos' AS tabela, COUNT(*) AS registros FROM contratos
+UNION ALL
+SELECT 'parcelas', COUNT(*) FROM parcelas
+UNION ALL
+SELECT 'parcelas_liminar', COUNT(*) FROM parcelas_liminar;
+
+-- 6.2 Confira os nomes, para ter certeza de que e tudo teste mesmo.
+SELECT id, cliente, data_contrato, valor_total
+FROM contratos
+ORDER BY id;
+
+
+-- 6.3 A limpeza.
+--
+-- TRUNCATE e mais rapido que DELETE e, com RESTART IDENTITY, zera tambem o
+-- contador de ids — o primeiro contrato real nasce como #1, e nao #37.
+-- CASCADE cuida das parcelas, que apontam para contratos por chave
+-- estrangeira. Nao ha como desfazer: nao existe rollback depois do COMMIT.
+BEGIN;
+
+TRUNCATE parcelas, parcelas_liminar, contratos RESTART IDENTITY CASCADE;
+
+COMMIT;
+
+
+-- 6.4 Conferir: as tres contagens devem voltar zero.
+SELECT 'contratos' AS tabela, COUNT(*) AS registros FROM contratos
+UNION ALL
+SELECT 'parcelas', COUNT(*) FROM parcelas
+UNION ALL
+SELECT 'parcelas_liminar', COUNT(*) FROM parcelas_liminar;
+
+
+-- Observacao: a estrutura das tabelas, as colunas e os indices permanecem
+-- intactos. So os registros sao removidos. O sistema continua funcionando
+-- normalmente, apenas vazio — como no primeiro dia.
+
