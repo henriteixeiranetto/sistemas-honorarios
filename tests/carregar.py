@@ -36,7 +36,13 @@ def carregar_financeiro() -> types.ModuleType:
 
     modulo = types.ModuleType("financeiro")
     modulo.__file__ = str(ORIGEM)
-    exec(compile(codigo, str(ORIGEM), "exec"), modulo.__dict__)
+    try:
+        exec(compile(codigo, str(ORIGEM), "exec"), modulo.__dict__)
+    except ModuleNotFoundError as erro:
+        raise ModuleNotFoundError(
+            f"Falta a dependência `{erro.name}` para carregar o sistema.\n"
+            "Instale tudo com:  pip install -r requirements-dev.txt"
+        ) from erro
     return modulo
 
 
