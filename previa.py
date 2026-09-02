@@ -88,6 +88,20 @@ CONTRATOS = pd.DataFrame([
      "quitado_em": _d(-30)},
 ])
 
+CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
+    "id": 21, "cliente": "Teste Liminar", "cpf_cnpj": "529.982.247-25",
+    "telefone": "", "valor_total": 0.0, "saldo_devedor": 0.0,
+    "data_contrato": _d(0), "observacoes": "", "tutela": "Deferido",
+    "hon_inicial_ativo": "Não", "hon_inicial_valor": 0.0,
+    "hon_inicial_parcelado": "Não", "hon_inicial_parcelas": 1,
+    "hon_inicial_vlr_parcela": 0.0, "hon_liminar_fixo": 2000.0,
+    "hon_liminar_reducao_vlr": 48000.0, "hon_liminar_reducao_prc": 12,
+    "hon_exito_percentual": 0.0, "hon_exito_fixo": 0.0,
+    "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
+    "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
+    "quitado_em": "",
+}])], ignore_index=True)
+
 PARCELAS = pd.DataFrame([
     {"id": 1, "contrato_id": 9, "nr_parcela": 1, "valor_parcela": 3775.0,
      "data_vencimento": _d(-120), "data_pagamento": _d(-118) + " 10:22:00",
@@ -109,8 +123,9 @@ PARCELAS_LIMINAR = pd.DataFrame([
      "data_prevista": _d(18), "data_pagamento": "", "pago": 0},
 ])
 
-# Espelha o schema real de produção (conferido em 02/09/2026). A mistura de
-# tipos aqui não é descuido: é dela que vieram os erros de UNION e COALESCE.
+# Espelha o schema real de produção. As datas continuam em três tipos
+# diferentes (date, timestamp e text) — é dessa mistura que vieram os erros
+# de UNION e COALESCE. Dinheiro já está todo em numeric.
 ESTRUTURA = pd.DataFrame(
     [
         {"table_name": t, "column_name": c, "data_type": d, "is_nullable": n,
@@ -124,17 +139,17 @@ ESTRUTURA = pd.DataFrame(
             ("contratos", "saldo_devedor", "numeric", "NO"),
             ("contratos", "data_contrato", "date", "NO"),
             ("contratos", "observacoes", "text", "YES"),
-            ("contratos", "hon_inicial_valor", "real", "YES"),
-            ("contratos", "hon_liminar_reducao_vlr", "real", "YES"),
-            ("contratos", "hon_exito_fixo", "real", "YES"),
+            ("contratos", "hon_inicial_valor", "numeric", "YES"),
+            ("contratos", "hon_liminar_reducao_vlr", "numeric", "YES"),
+            ("contratos", "hon_exito_fixo", "numeric", "YES"),
             ("contratos", "exito_data_pagamento", "text", "YES"),
-            ("contratos", "exito_valor_recebido", "real", "YES"),
+            ("contratos", "exito_valor_recebido", "numeric", "YES"),
             ("contratos", "quitado_em", "text", "YES"),
             ("parcelas", "valor_parcela", "numeric", "NO"),
             ("parcelas", "data_vencimento", "date", "NO"),
             ("parcelas", "data_pagamento", "timestamp without time zone", "YES"),
             ("parcelas", "pago", "integer", "YES"),
-            ("parcelas_liminar", "valor_parcela", "real", "NO"),
+            ("parcelas_liminar", "valor_parcela", "numeric", "NO"),
             ("parcelas_liminar", "data_prevista", "text", "NO"),
             ("parcelas_liminar", "data_pagamento", "text", "YES"),
             ("parcelas_liminar", "pago", "integer", "YES"),
@@ -148,8 +163,19 @@ def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
 
     if "information_schema" in q:
         return ESTRUTURA.copy()
-    if "select c.id from contratos c" in q:      # contratos ativos
-        return CONTRATOS[["id"]].iloc[:2].copy()
+    if "select c.id from contratos c" in q:
+        ativos = CONTRATOS[
+            (CONTRATOS["saldo_devedor"] > 0)
+            | (CONTRATOS["hon_liminar_reducao_vlr"] > 0)
+            | (CONTRATOS["hon_exito_fixo"] > 0)
+            | (CONTRATOS["hon_exito_percentual"] > 0)
+        ]
+        return ativos[["id"]].copy()
+    if "select c.cliente, c.tutela" in q:
+        d = CONTRATOS[CONTRATOS["cliente"] == "Teste Liminar"]
+        return pd.DataFrame({"cliente": d["cliente"], "tutela": d["tutela"],
+                             "valor": d["hon_liminar_reducao_vlr"],
+                             "parcelas": d["hon_liminar_reducao_prc"]})
     if "count(*)" in q:
         return pd.DataFrame([{"count": len(CONTRATOS)}])
     if "version()" in q:

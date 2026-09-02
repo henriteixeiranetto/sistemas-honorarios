@@ -52,41 +52,36 @@ SELECT id, cliente, observacoes FROM contratos WHERE observacoes = 'Pago';
 
 
 -- -----------------------------------------------------------------------------
--- 2) TERMINAR A MIGRACAO DO DINHEIRO PARA NUMERIC  — RECOMENDADO
+-- 2) DINHEIRO EM NUMERIC  — JA APLICADO EM 02/09/2026
 --
--- Conferido no banco em 02/09/2026 via information_schema. A migracao ja foi
--- feita PELA METADE em algum momento:
+-- Todas as colunas de valor estao em NUMERIC. Nao ha nada a rodar aqui.
+-- O bloco fica registrado para historico e para servir de referencia caso um
+-- banco novo (ambiente de teste) precise da mesma correcao.
 --
---   Ja estao em numeric:  contratos.valor_total, contratos.saldo_devedor,
---                         parcelas.valor_parcela
---   Ainda em real:        parcelas_liminar.valor_parcela e todas as colunas
---                         hon_* e exito_valor_recebido de contratos
+-- Por que importava: `real` e float de 4 bytes, com ~7 digitos de precisao.
+-- Um contrato de R$ 1.234.567,89 nao cabia e era arredondado.
 --
--- Isso e incoerente: valor de parcela e numeric em `parcelas` e real em
--- `parcelas_liminar`. E `real` e float de 4 bytes, com ~7 digitos de
--- precisao: a partir da casa do milhao ele arredonda errado.
+-- Para conferir que continua tudo certo (deve devolver ZERO linhas):
 --
--- O codigo Python ja aceita os dois tipos (ha um conversor que devolve
--- numeric como float), entao nada quebra depois de rodar.
--- -----------------------------------------------------------------------------
-BEGIN;
-
-ALTER TABLE contratos
-    ALTER COLUMN hon_inicial_valor       TYPE NUMERIC(14,2) USING ROUND(hon_inicial_valor::numeric, 2),
-    ALTER COLUMN hon_inicial_vlr_parcela TYPE NUMERIC(14,2) USING ROUND(hon_inicial_vlr_parcela::numeric, 2),
-    ALTER COLUMN hon_liminar_fixo        TYPE NUMERIC(14,2) USING ROUND(hon_liminar_fixo::numeric, 2),
-    ALTER COLUMN hon_liminar_reducao_vlr TYPE NUMERIC(14,2) USING ROUND(hon_liminar_reducao_vlr::numeric, 2),
-    ALTER COLUMN hon_exito_fixo          TYPE NUMERIC(14,2) USING ROUND(hon_exito_fixo::numeric, 2),
-    ALTER COLUMN exito_valor_recebido    TYPE NUMERIC(14,2) USING ROUND(exito_valor_recebido::numeric, 2),
-    ALTER COLUMN hon_exito_percentual    TYPE NUMERIC(6,2)  USING ROUND(hon_exito_percentual::numeric, 2);
-
-ALTER TABLE parcelas_liminar
-    ALTER COLUMN valor_parcela TYPE NUMERIC(14,2) USING ROUND(valor_parcela::numeric, 2);
-
-COMMIT;
-
--- Confira depois com a consulta 1.4 no fim deste arquivo: nenhuma coluna de
--- valor deve continuar como `real`.
+--   SELECT table_name, column_name, data_type
+--   FROM information_schema.columns
+--   WHERE table_schema = 'public' AND data_type = 'real'
+--     AND table_name IN ('contratos', 'parcelas', 'parcelas_liminar');
+--
+-- O comando aplicado foi:
+--
+--   BEGIN;
+--   ALTER TABLE contratos
+--       ALTER COLUMN hon_inicial_valor       TYPE NUMERIC(14,2) USING ROUND(hon_inicial_valor::numeric, 2),
+--       ALTER COLUMN hon_inicial_vlr_parcela TYPE NUMERIC(14,2) USING ROUND(hon_inicial_vlr_parcela::numeric, 2),
+--       ALTER COLUMN hon_liminar_fixo        TYPE NUMERIC(14,2) USING ROUND(hon_liminar_fixo::numeric, 2),
+--       ALTER COLUMN hon_liminar_reducao_vlr TYPE NUMERIC(14,2) USING ROUND(hon_liminar_reducao_vlr::numeric, 2),
+--       ALTER COLUMN hon_exito_fixo          TYPE NUMERIC(14,2) USING ROUND(hon_exito_fixo::numeric, 2),
+--       ALTER COLUMN exito_valor_recebido    TYPE NUMERIC(14,2) USING ROUND(exito_valor_recebido::numeric, 2),
+--       ALTER COLUMN hon_exito_percentual    TYPE NUMERIC(6,2)  USING ROUND(hon_exito_percentual::numeric, 2);
+--   ALTER TABLE parcelas_liminar
+--       ALTER COLUMN valor_parcela TYPE NUMERIC(14,2) USING ROUND(valor_parcela::numeric, 2);
+--   COMMIT;
 
 
 -- 3) REGRAS DE INTEGRIDADE  — RECOMENDADO

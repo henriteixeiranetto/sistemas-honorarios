@@ -112,9 +112,10 @@ CACHE_TTL = 120
 MAX_TENTATIVAS_LOGIN = 5
 BLOQUEIO_LOGIN_SEG = 60
 
-# psycopg2 devolve NUMERIC como Decimal, o que quebraria as contas em float
-# espalhadas pelo sistema. Converter para float mantém tudo compatível caso
-# um dia as colunas REAL sejam migradas para NUMERIC(14,2) (ver migracoes.sql).
+# psycopg2 devolve NUMERIC como Decimal, e Decimal não se mistura com float
+# nas contas espalhadas pelo sistema (round(Decimal - float) levanta TypeError).
+# Como as colunas de dinheiro são NUMERIC, este conversor é o que mantém tudo
+# funcionando em float.
 psycopg2.extensions.register_type(
     psycopg2.extensions.new_type(
         psycopg2.extensions.DECIMAL.values,
@@ -532,10 +533,10 @@ def escalar(query: str, params: Sequence = (), padrao: Any = 0) -> Any:
 # 5. SCHEMA
 # =============================================================================
 DDL_CONTRATOS = """
--- Os tipos abaixo espelham o banco de produção, conferido via
--- information_schema. Não é o schema "ideal" — é o real, de propósito: um
--- ambiente de teste criado do zero precisa reproduzir produção, senão não
--- pega os erros que importam. O migracoes.sql cuida de corrigir o resto.
+-- Os tipos espelham o banco de produção, conferido via information_schema.
+-- Um ambiente de teste criado do zero precisa nascer igual à produção, senão
+-- não reproduz os erros que importam. Dinheiro em NUMERIC desde 02/09/2026,
+-- quando a migração do migracoes.sql foi aplicada.
 CREATE TABLE IF NOT EXISTS contratos (
     id                      SERIAL PRIMARY KEY,
     cliente                 TEXT NOT NULL,
@@ -546,16 +547,16 @@ CREATE TABLE IF NOT EXISTS contratos (
     data_contrato           DATE NOT NULL,
     observacoes             TEXT,
     hon_inicial_ativo       TEXT,
-    hon_inicial_valor       REAL,
+    hon_inicial_valor       NUMERIC(14,2),
     hon_inicial_parcelado   TEXT,
     hon_inicial_parcelas    INTEGER,
-    hon_inicial_vlr_parcela REAL,
-    hon_liminar_fixo        REAL,
-    hon_liminar_reducao_vlr REAL,
+    hon_inicial_vlr_parcela NUMERIC(14,2),
+    hon_liminar_fixo        NUMERIC(14,2),
+    hon_liminar_reducao_vlr NUMERIC(14,2),
     hon_liminar_reducao_prc INTEGER,
     tutela                  TEXT,
-    hon_exito_percentual    REAL,
-    hon_exito_fixo          REAL,
+    hon_exito_percentual    NUMERIC(6,2),
+    hon_exito_fixo          NUMERIC(14,2),
     nr_processo             TEXT,
     nr_vara                 TEXT,
     nome_juiz               TEXT,
@@ -581,7 +582,7 @@ CREATE TABLE IF NOT EXISTS parcelas_liminar (
     id             SERIAL PRIMARY KEY,
     contrato_id    INTEGER NOT NULL REFERENCES contratos(id) ON DELETE CASCADE,
     nr_parcela     INTEGER NOT NULL,
-    valor_parcela  REAL NOT NULL,
+    valor_parcela  NUMERIC(14,2) NOT NULL,
     data_prevista  TEXT NOT NULL,
     data_pagamento TEXT,
     pago           INTEGER DEFAULT 0
@@ -592,15 +593,15 @@ CREATE TABLE IF NOT EXISTS parcelas_liminar (
 # direta no ALTER TABLE é segura.
 COLUNAS_EXTRAS: list[tuple[str, str]] = [
     ("hon_inicial_ativo", "TEXT"),
-    ("hon_inicial_valor", "REAL"),
+    ("hon_inicial_valor", "NUMERIC(14,2)"),
     ("hon_inicial_parcelado", "TEXT"),
     ("hon_inicial_parcelas", "INTEGER"),
-    ("hon_inicial_vlr_parcela", "REAL"),
-    ("hon_liminar_fixo", "REAL"),
-    ("hon_liminar_reducao_vlr", "REAL"),
+    ("hon_inicial_vlr_parcela", "NUMERIC(14,2)"),
+    ("hon_liminar_fixo", "NUMERIC(14,2)"),
+    ("hon_liminar_reducao_vlr", "NUMERIC(14,2)"),
     ("hon_liminar_reducao_prc", "INTEGER"),
-    ("hon_exito_percentual", "REAL"),
-    ("hon_exito_fixo", "REAL"),
+    ("hon_exito_percentual", "NUMERIC(6,2)"),
+    ("hon_exito_fixo", "NUMERIC(14,2)"),
     ("nr_processo", "TEXT"),
     ("nr_vara", "TEXT"),
     ("nome_juiz", "TEXT"),
@@ -608,7 +609,7 @@ COLUNAS_EXTRAS: list[tuple[str, str]] = [
     ("tutela", "TEXT"),
     ("exito_pago", "INTEGER"),
     ("exito_data_pagamento", "TEXT"),
-    ("exito_valor_recebido", "REAL"),
+    ("exito_valor_recebido", "NUMERIC(14,2)"),
     # Substitui o antigo hábito de gravar "Pago" em `observacoes`, que apagava
     # as anotações do contrato quando o saldo zerava.
     ("quitado_em", "TEXT"),
