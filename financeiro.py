@@ -834,6 +834,16 @@ def moeda(valor: Any) -> str:
     return "R$ " + bruto.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 
 
+def moeda_md(valor: Any) -> str:
+    """Valor em real seguro para markdown.
+
+    O markdown do Streamlit trata `$...$` como fórmula LaTeX. Dois "R$" na
+    mesma frase faziam tudo entre eles virar matemática, em fonte
+    monoespaçada, e os `**` de negrito apareciam crus na tela.
+    """
+    return moeda(valor).replace("$", r"\$")
+
+
 def numero_br(valor: Any, casas: int = 2) -> str:
     """Número sem o símbolo da moeda, também no padrão brasileiro."""
     try:
@@ -901,11 +911,11 @@ def resumo_parcelamento(total: float, quantidade: int, rotulo: str = "Total") ->
     """
     quantidade = max(int(quantidade), 1)
     if quantidade == 1:
-        st.info(f"**{rotulo}: {moeda(total)}** — pagamento à vista, em 1 parcela.")
+        st.info(f"**{rotulo}: {moeda_md(total)}** — pagamento à vista, em 1 parcela.")
         return
     st.info(
-        f"**{rotulo}: {moeda(total)}**  ÷  **{quantidade} parcelas**  "
-        f"=  **{moeda(total / quantidade)}** por parcela"
+        f"**{rotulo}: {moeda_md(total)}**  ÷  **{quantidade} parcelas**  "
+        f"=  **{moeda_md(total / quantidade)}** por parcela"
     )
 
 
@@ -1621,7 +1631,7 @@ def _bloco_inadimplencia() -> None:
 
     st.error(
         f"🚨 Atenção: {len(resumo)} cliente(s) em inadimplência! "
-        f"Total atrasado: **{moeda(resumo['valor'].sum())}**"
+        f"Total atrasado: **{moeda_md(resumo['valor'].sum())}**"
     )
     resumo["telefone"] = resumo["telefone"].apply(formatar_telefone)
     resumo.columns = [
@@ -1652,7 +1662,7 @@ def _bloco_proximos_vencimentos(dias: int = 15) -> None:
             }
         )
         tabela(visao, ["Valor"])
-        st.caption(f"Total previsto: **{moeda(df['valor_parcela'].sum())}**")
+        st.caption(f"Total previsto: **{moeda_md(df['valor_parcela'].sum())}**")
 
 
 def _grafico_recebimentos() -> None:
@@ -1694,7 +1704,7 @@ def _grafico_recebimentos() -> None:
         .configure_view(strokeWidth=0)
     )
     st.altair_chart(grafico, use_container_width=True)
-    st.caption(f"Total recebido no período exibido: **{moeda(df['total'].sum())}**")
+    st.caption(f"Total recebido no período exibido: **{moeda_md(df['total'].sum())}**")
 
 
 # ----------------------------------------------------------- NOVO CONTRATO --
@@ -2146,7 +2156,7 @@ def _tab_exito(contrato_id: int, contrato: Any) -> None:
     if ja_pago == 1:
         recebido = float(contrato.get("exito_valor_recebido") or 0)
         data_recebido = formatar_data(contrato.get("exito_data_pagamento"))
-        st.success(f"🏆 Honorários de êxito já recebidos em **{data_recebido}**: **{moeda(recebido)}**")
+        st.success(f"🏆 Honorários de êxito já recebidos em **{data_recebido}**: **{moeda_md(recebido)}**")
         if st.button("↩️ Estornar recebimento de êxito", key=f"exit_estorno_{contrato_id}"):
             exec_db(
                 """UPDATE contratos
@@ -2161,7 +2171,7 @@ def _tab_exito(contrato_id: int, contrato: Any) -> None:
     if percentual > 0:
         st.info(f"Percentual de êxito acordado: **{numero_br(percentual)}%** sobre o valor da causa.")
     if fixo > 0:
-        st.info(f"Valor fixo de êxito acordado: **{moeda(fixo)}**")
+        st.info(f"Valor fixo de êxito acordado: **{moeda_md(fixo)}**")
 
     col1, col2 = st.columns(2)
     valor_recebido = col1.number_input(
@@ -2646,7 +2656,7 @@ def _expander_parcelas_iniciais(contrato_id: int, contrato: Any) -> None:
         )
         primeiro = col3.date_input(
             "Vencimento da 1ª", value=hoje(), key=f"rec_venc_{contrato_id}", format=FORMATO_DATA_WIDGET)
-        st.caption(f"Cada parcela ficará em **{moeda(novo_total / max(nova_qtd, 1))}**.")
+        st.caption(f"Cada parcela ficará em **{moeda_md(novo_total / max(nova_qtd, 1))}**.")
 
         confirmar_recriar = st.checkbox(
             "Entendo que as parcelas atuais (e suas baixas) serão apagadas.",

@@ -59,6 +59,11 @@ r.checar("moeda: zero", fin.moeda(0), "R$ 0,00")
 r.checar("moeda: negativo", fin.moeda(-300.25), "R$ -300,25")
 r.checar("moeda: texto inválido", fin.moeda("abc"), "R$ 0,00")
 r.checar("moeda: None", fin.moeda(None), "R$ 0,00")
+# Regressão: o markdown do Streamlit trata $...$ como LaTeX. Duas ocorrências
+# de "R$" na mesma frase faziam o texto entre elas virar fórmula, em fonte
+# monoespaçada, com os ** do negrito aparecendo crus.
+r.checar("moeda para markdown escapa o cifrão", fin.moeda_md(48000), r"R\$ 48.000,00")
+r.verdadeiro("moeda comum NÃO escapa (usada em HTML, PDF e recibo)", "\\" not in fin.moeda(48000))
 r.checar("número sem moeda", fin.numero_br(1234567.891), "1.234.567,89")
 r.checar("percentual pt-BR", fin.porcentagem(0.47), "47,0%")
 r.checar("percentual cheio", fin.porcentagem(1.0), "100,0%")
