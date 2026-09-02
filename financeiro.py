@@ -274,8 +274,18 @@ st.markdown(
         hr { border-color: var(--linha) !important; }
 
         /* Some com a barra do Streamlit para o sistema parecer um produto,
-           não um script publicado. */
-        #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; height: 0; }
+           não um script publicado. Esconde só a barra de ferramentas: o
+           cabeçalho inteiro não pode sumir porque é nele que fica o botão de
+           reabrir a barra lateral — sem ele, quem recolhesse o menu ficaria
+           sem como trazê-lo de volta. */
+        #MainMenu,
+        [data-testid="stToolbar"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"],
+        footer { display: none !important; }
+
+        header[data-testid="stHeader"] { background: transparent; height: 0; }
+        [data-testid="stSidebarCollapsedControl"] { display: flex !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -647,9 +657,9 @@ def inicializar_banco() -> dict[str, Any]:
             with transacao() as cur:
                 cur.execute(indice)
         except Exception as erro:
-            tabela = "parcelas_liminar" if "plim" in indice else "parcelas"
+            alvo = "parcelas_liminar" if "plim" in indice else "parcelas"
             avisos.append(
-                f"Não foi possível criar o índice único de `{tabela}` — "
+                f"Não foi possível criar o índice único de `{alvo}` — "
                 f"provavelmente há parcelas duplicadas. Detalhe: {str(erro).strip()[:160]}"
             )
 
@@ -1334,16 +1344,21 @@ ORDER BY c.cliente ASC
 """
 
 SQL_ATRASADAS = """
-SELECT c.cliente, c.telefone, c.saldo_devedor,
-       'Honorários Iniciais' AS tipo, p.nr_parcela, p.valor_parcela,
-       p.data_vencimento AS vencimento
+-- Os ::text e ::numeric não são enfeite: as colunas de data têm tipos
+-- diferentes entre `parcelas` (date) e `parcelas_liminar` (text), e o UNION
+-- exige que os dois lados batam. O cast normaliza sem depender do schema.
+SELECT c.cliente, c.telefone, c.saldo_devedor::numeric AS saldo_devedor,
+       'Honorários Iniciais' AS tipo, p.nr_parcela,
+       p.valor_parcela::numeric AS valor_parcela,
+       p.data_vencimento::text AS vencimento
 FROM parcelas p
 JOIN contratos c ON c.id = p.contrato_id
 WHERE p.pago = 0 AND p.data_vencimento < %s
 UNION ALL
-SELECT c.cliente, c.telefone, c.saldo_devedor,
-       'Liminar / Redução', pl.nr_parcela, pl.valor_parcela,
-       pl.data_prevista
+SELECT c.cliente, c.telefone, c.saldo_devedor::numeric,
+       'Liminar / Redução', pl.nr_parcela,
+       pl.valor_parcela::numeric,
+       pl.data_prevista::text
 FROM parcelas_liminar pl
 JOIN contratos c ON c.id = pl.contrato_id
 WHERE pl.pago = 0 AND pl.data_prevista < %s
@@ -1351,13 +1366,15 @@ WHERE pl.pago = 0 AND pl.data_prevista < %s
 
 SQL_PROXIMAS = """
 SELECT c.cliente, c.telefone, 'Honorários Iniciais' AS tipo,
-       p.nr_parcela, p.valor_parcela, p.data_vencimento AS vencimento
+       p.nr_parcela, p.valor_parcela::numeric AS valor_parcela,
+       p.data_vencimento::text AS vencimento
 FROM parcelas p
 JOIN contratos c ON c.id = p.contrato_id
 WHERE p.pago = 0 AND p.data_vencimento >= %s AND p.data_vencimento <= %s
 UNION ALL
 SELECT c.cliente, c.telefone, 'Liminar / Redução',
-       pl.nr_parcela, pl.valor_parcela, pl.data_prevista
+       pl.nr_parcela, pl.valor_parcela::numeric,
+       pl.data_prevista::text
 FROM parcelas_liminar pl
 JOIN contratos c ON c.id = pl.contrato_id
 WHERE pl.pago = 0 AND pl.data_prevista >= %s AND pl.data_prevista <= %s
@@ -1409,6 +1426,20 @@ RETURNING id
 """
 
 
+def _protegido(nome: str, bloco: Callable[[], None]) -> None:
+    """Roda um bloco do painel isolando a falha.
+
+    Sem isso, uma única consulta com erro de tipo apaga a tela inteira —
+    inclusive as partes que estavam funcionando.
+    """
+    try:
+        bloco()
+    except ErroBanco as erro:
+        st.warning(f"Não foi possível carregar {nome}: {str(erro).strip()[:200]}", icon="⚠️")
+    except Exception as erro:  # noqa: BLE001
+        st.warning(f"Falha ao montar {nome}: {type(erro).__name__}: {str(erro)[:160]}", icon="⚠️")
+
+
 def _mapa_contratos(df: pd.DataFrame) -> dict[str, int]:
     return {f"{linha['cliente']} (Contrato #{linha['id']})": int(linha["id"]) for _, linha in df.iterrows()}
 
@@ -1441,12 +1472,14 @@ def pagina_dashboard() -> None:
     m4.metric("Redução a Receber", moeda(liminar_pendente))
     st.divider()
 
-    _bloco_inadimplencia()
-    _bloco_proximos_vencimentos()
+    # Cada bloco é isolado: uma consulta com problema mostra um aviso no lugar
+    # dela em vez de derrubar o painel inteiro, como acontecia antes.
+    _protegido("alerta de inadimplência", _bloco_inadimplencia)
+    _protegido("próximos vencimentos", _bloco_proximos_vencimentos)
 
     if df_ativos.empty:
-        st.success("Todos os clientes estão com as contas em dia!")
-        _grafico_recebimentos()
+        st.success("Nenhum contrato com saldo devedor em aberto.")
+        _protegido("gráfico de recebimentos", _grafico_recebimentos)
         return
 
     col_titulo, col_atalho = st.columns([2, 1])
@@ -1478,7 +1511,7 @@ def pagina_dashboard() -> None:
     tabela(df_visao, ["Valor Total", "Saldo Pendente"])
     st.divider()
     botoes_exportacao(df_visao, "contratos_ativos", "Relatório de Contratos Ativos")
-    _grafico_recebimentos()
+    _protegido("gráfico de recebimentos", _grafico_recebimentos)
 
 
 def _bloco_inadimplencia() -> None:
@@ -2787,8 +2820,11 @@ def pagina_gestao() -> None:
             }
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                for nome, tabela in dados.items():
-                    (tabela if not tabela.empty else pd.DataFrame({"vazio": []})).to_excel(
+                # `conteudo`, nao `tabela`: usar o nome da funcao `tabela()` como
+                # variavel de laco faz o Python tratar o nome como local em toda a
+                # funcao, quebrando a chamada real la na aba de Diagnostico.
+                for nome, conteudo in dados.items():
+                    (conteudo if not conteudo.empty else pd.DataFrame({"vazio": []})).to_excel(
                         writer, index=False, sheet_name=nome[:31]
                     )
             st.download_button(
@@ -2799,7 +2835,7 @@ def pagina_gestao() -> None:
                 type="primary",
             )
             st.caption(
-                " • ".join(f"{nome}: {len(tabela)} registro(s)" for nome, tabela in dados.items())
+                " • ".join(f"{nome}: {len(conteudo)} registro(s)" for nome, conteudo in dados.items())
             )
 
     with aba_diagnostico:
