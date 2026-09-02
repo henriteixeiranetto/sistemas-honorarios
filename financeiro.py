@@ -1437,17 +1437,36 @@ ORDER BY mes
 """
 
 SQL_IDS_ATIVOS = """
--- Contrato ativo = tem algo a receber, de qualquer natureza: saldo dos
--- honorários iniciais, parcela da redução em aberto, ou êxito acordado e
--- ainda não recebido.
+-- Contrato ativo = tem algo a receber, de qualquer natureza:
+--   1. saldo dos honorários iniciais em aberto;
+--   2. parcela da redução já cadastrada e não recebida;
+--   3. redução ACORDADA mas ainda sem parcelas criadas — o dinheiro está
+--      combinado, só não foi agendado ainda (era o caso que faltava);
+--   4. êxito acordado e ainda não recebido.
 SELECT c.id
 FROM contratos c
 WHERE COALESCE(c.saldo_devedor, 0) > 0
    OR EXISTS (SELECT 1 FROM parcelas_liminar pl
                WHERE pl.contrato_id = c.id AND pl.pago = 0)
+   OR (COALESCE(c.hon_liminar_reducao_vlr, 0) > 0
+       AND NOT EXISTS (SELECT 1 FROM parcelas_liminar pl
+                        WHERE pl.contrato_id = c.id))
    OR (COALESCE(c.exito_pago, 0) = 0
        AND (COALESCE(c.hon_exito_percentual, 0) > 0
             OR COALESCE(c.hon_exito_fixo, 0) > 0))
+"""
+
+SQL_REDUCAO_SEM_PARCELAS = """
+-- Redução deferida e acordada, mas sem cronograma. Fica invisível em
+-- Pagamentos até alguém criar as parcelas, então o painel avisa.
+SELECT c.cliente, c.tutela,
+       COALESCE(c.hon_liminar_reducao_vlr, 0)::numeric AS valor,
+       COALESCE(c.hon_liminar_reducao_prc, 0) AS parcelas
+FROM contratos c
+WHERE COALESCE(c.hon_liminar_reducao_vlr, 0) > 0
+  AND c.tutela IN ('Deferido', 'Parcial')
+  AND NOT EXISTS (SELECT 1 FROM parcelas_liminar pl WHERE pl.contrato_id = c.id)
+ORDER BY c.cliente
 """
 
 SQL_ESTRUTURA = """
@@ -1563,6 +1582,7 @@ def pagina_dashboard() -> None:
     # Cada bloco é isolado: uma consulta com problema mostra um aviso no lugar
     # dela em vez de derrubar o painel inteiro, como acontecia antes.
     _protegido("alerta de inadimplência", _bloco_inadimplencia)
+    _protegido("reduções sem cronograma", _bloco_reducao_pendente)
     _protegido("próximos vencimentos", _bloco_proximos_vencimentos)
 
     if df_ativos.empty:
@@ -1640,6 +1660,36 @@ def _bloco_inadimplencia() -> None:
     ]
     tabela(resumo, ["Valor Atrasado"])
     st.divider()
+
+
+def _bloco_reducao_pendente() -> None:
+    """Avisa sobre redução deferida que ainda não virou cronograma.
+
+    O contrato guarda o acordo (valor e nº de parcelas), mas as parcelas só
+    nascem quando alguém clica em "Criar Parcelas da Redução". Até lá o
+    contrato não aparece em Pagamentos e não entra em nenhuma cobrança —
+    silenciosamente. Este aviso existe para isso não passar batido.
+    """
+    df = select_db(SQL_REDUCAO_SEM_PARCELAS)
+    if df.empty:
+        return
+
+    numerico(df, "valor", "parcelas")
+    total = df["valor"].sum()
+    st.warning(
+        f"⏳ {len(df)} contrato(s) com redução deferida ainda **sem parcelas cadastradas** "
+        f"— {moeda_md(total)} acordados que não entram em cobrança. "
+        "Crie o cronograma em **📂 Meus Contratos → Parcelas da Redução da Liminar**.",
+        icon="⏳",
+    )
+    with st.expander(f"Ver os {len(df)} contrato(s)", expanded=False):
+        visao = pd.DataFrame({
+            "Cliente": df["cliente"],
+            "Tutela": df["tutela"],
+            "Valor Acordado": df["valor"],
+            "Parcelas Previstas": df["parcelas"].astype(int),
+        })
+        tabela(visao, ["Valor Acordado"])
 
 
 def _bloco_proximos_vencimentos(dias: int = 15) -> None:
