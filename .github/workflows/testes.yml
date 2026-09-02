@@ -17,7 +17,6 @@ jobs:
         # O requirements.txt aceita pandas 2 e 3; o Railway pode instalar
         # qualquer uma das duas, então as duas precisam passar.
         include:
-          # 3.11 é o que o Railway/nixpacks costuma usar em produção.
           - rotulo: "py3.11 · pandas 2.x"
             python: "3.11"
             spec: "pandas>=2.2,<3"
@@ -29,6 +28,13 @@ jobs:
             spec: "pandas>=2.2,<3"
           - rotulo: "py3.12 · pandas 3.x"
             python: "3.12"
+            spec: "pandas>=3,<4"
+          # 3.13 é a versão que o Railway roda hoje em produção.
+          - rotulo: "py3.13 · pandas 2.x"
+            python: "3.13"
+            spec: "pandas>=2.2,<3"
+          - rotulo: "py3.13 · pandas 3.x"
+            python: "3.13"
             spec: "pandas>=3,<4"
 
     name: ${{ matrix.rotulo }}
