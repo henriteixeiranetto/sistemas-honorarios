@@ -69,9 +69,15 @@ faltarem e os índices. Não é preciso rodar nada à mão.
 
 ---
 
-## Testes
+## Como testar
 
-Não precisam de banco: a camada de conexão é simulada.
+Há três formas, da mais segura para a mais arriscada. **Nenhuma delas é o
+sistema em produção** — ali qualquer clique escreve nos dados reais do
+escritório.
+
+### 1. Suíte automática (segundos, risco zero)
+
+Não precisa de banco: a camada de conexão é simulada.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -86,6 +92,42 @@ python tests/rodar_todos.py
 
 O GitHub Actions roda a suíte a cada push, com pandas 2 e pandas 3 — as duas
 faixas que o `requirements.txt` aceita.
+
+### 2. Prévia com dados falsos (clicar por tudo, risco zero)
+
+```bash
+streamlit run previa.py
+```
+
+Abre o sistema inteiro com contratos de exemplo, **sem banco e sem
+credencial**. Dá para navegar por todas as telas, conferir layout, formatação
+e navegação. As gravações são ignoradas.
+
+Os dados de exemplo cobrem de propósito os casos que costumam quebrar: valor
+na casa do milhão, contrato quitado, parcela atrasada, cliente sem telefone e
+observação com acento.
+
+Para conferir se o painel aguenta uma consulta com erro sem derrubar as demais:
+
+```bash
+SIMULA_FALHA=1 streamlit run previa.py
+```
+
+### 3. Ambiente de teste de verdade (o que ainda falta)
+
+A prévia não exercita o banco: não pega erro de tipo de coluna, de permissão
+nem de constraint. Para isso é preciso um **segundo projeto Supabase**, e
+apontar as variáveis locais para ele:
+
+1. Crie um projeto novo no Supabase (o plano gratuito permite mais de um).
+2. Preencha `.streamlit/secrets.toml` com os dados desse projeto.
+3. `streamlit run financeiro.py` — o sistema cria as tabelas sozinho.
+
+Aí dá para cadastrar, pagar, estornar e excluir à vontade. É o único jeito de
+testar o caminho completo sem tocar nos contratos reais.
+
+> **Nunca teste gravação apontando para o banco de produção.** Se precisar
+> mesmo, tire antes um backup em ⚙️ Gestão → Backup.
 
 ---
 
