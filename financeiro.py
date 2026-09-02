@@ -1408,6 +1408,20 @@ GROUP BY mes
 ORDER BY mes
 """
 
+SQL_IDS_ATIVOS = """
+-- Contrato ativo = tem algo a receber, de qualquer natureza: saldo dos
+-- honorários iniciais, parcela da redução em aberto, ou êxito acordado e
+-- ainda não recebido.
+SELECT c.id
+FROM contratos c
+WHERE COALESCE(c.saldo_devedor, 0) > 0
+   OR EXISTS (SELECT 1 FROM parcelas_liminar pl
+               WHERE pl.contrato_id = c.id AND pl.pago = 0)
+   OR (COALESCE(c.exito_pago, 0) = 0
+       AND (COALESCE(c.hon_exito_percentual, 0) > 0
+            OR COALESCE(c.hon_exito_fixo, 0) > 0))
+"""
+
 SQL_ESTRUTURA = """
 SELECT table_name, column_name, data_type, is_nullable, column_default
 FROM information_schema.columns
@@ -1445,7 +1459,39 @@ def _protegido(nome: str, bloco: Callable[[], None]) -> None:
 
 
 def _mapa_contratos(df: pd.DataFrame) -> dict[str, int]:
-    return {f"{linha['cliente']} (Contrato #{linha['id']})": int(linha["id"]) for _, linha in df.iterrows()}
+    """Rótulos das listas de seleção: só o nome do cliente.
+
+    O "(Contrato #12)" saiu a pedido do escritório. Ele existia por um motivo
+    real, porém: o rótulo é a chave do selectbox, e dois contratos do mesmo
+    cliente colidiriam — um sumiria da lista. Por isso o desempate só entra
+    quando o nome de fato se repete, usando algo que o usuário reconhece
+    (o processo ou a data), e o número do contrato apenas como último recurso.
+    """
+    nomes = df["cliente"].astype(str).str.strip()
+    repetidos = set(nomes[nomes.duplicated(keep=False)])
+
+    mapa: dict[str, int] = {}
+    for _, linha in df.iterrows():
+        rotulo = str(linha["cliente"]).strip()
+
+        if rotulo in repetidos:
+            processo = linha.get("nr_processo", "")
+            data = linha.get("data_contrato", "")
+            if not nulo(processo):
+                rotulo = f"{rotulo} — {processo}"
+            elif not nulo(data):
+                rotulo = f"{rotulo} — {formatar_data(data)}"
+            else:
+                rotulo = f"{rotulo} — #{linha['id']}"
+
+        # Rede de segurança: mesmo nome, mesmo processo, mesma data.
+        base, tentativa = rotulo, 2
+        while rotulo in mapa:
+            rotulo = f"{base} ({tentativa})"
+            tentativa += 1
+
+        mapa[rotulo] = int(linha["id"])
+    return mapa
 
 
 # ---------------------------------------------------------------- DASHBOARD --
@@ -1458,7 +1504,17 @@ def pagina_dashboard() -> None:
         return
 
     numerico(df_contratos, "valor_total", "saldo_devedor")
-    df_ativos = df_contratos[df_contratos["saldo_devedor"] > 0].copy()
+    # "Ativo" era só quem devia honorários iniciais. Para este escritório isso
+    # dava quase sempre zero: boa parte dos contratos não tem cobrança inicial
+    # e vive da redução da liminar e do êxito. Um contrato com parcela de
+    # redução a vencer está ativo, mesmo com saldo inicial zerado.
+    ids_ativos = select_db(SQL_IDS_ATIVOS)
+    if ids_ativos.empty:
+        df_ativos = df_contratos.iloc[0:0].copy()
+    else:
+        df_ativos = df_contratos[
+            df_contratos["id"].isin(set(ids_ativos["id"].astype(int)))
+        ].copy()
 
     df_liminar = select_db(
         """

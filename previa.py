@@ -148,6 +148,8 @@ def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
 
     if "information_schema" in q:
         return ESTRUTURA.copy()
+    if "select c.id from contratos c" in q:      # contratos ativos
+        return CONTRATOS[["id"]].iloc[:2].copy()
     if "count(*)" in q:
         return pd.DataFrame([{"count": len(CONTRATOS)}])
     if "version()" in q:

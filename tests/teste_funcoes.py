@@ -176,4 +176,39 @@ r.checar("vazio vira zero", float(convertido["saldo_devedor"].sum()), 3.0)
 r.verdadeiro("coluna inexistente não quebra", "x" not in fin.numerico(bruto.copy(), "x").columns)
 
 
+r.secao("[13] Rótulos das listas de contrato")
+# O escritório pediu para tirar o "(Contrato #12)" do lado do nome. O rótulo
+# é a chave do selectbox: sem desempate, dois contratos do mesmo cliente
+# colidiriam e um sumiria da lista.
+_df = pd.DataFrame([
+    {"id": 9, "cliente": "Construtora Ação Ltda", "nr_processo": "0801234-55", "data_contrato": "2026-03-18"},
+    {"id": 11, "cliente": "José Caverna", "nr_processo": "", "data_contrato": "2026-03-09"},
+])
+_mapa = fin._mapa_contratos(_df)
+r.checar("nome limpo, sem número do contrato", sorted(_mapa), ["Construtora Ação Ltda", "José Caverna"])
+
+_repetido = pd.DataFrame([
+    {"id": 9, "cliente": "Maria Silva", "nr_processo": "0801234-55", "data_contrato": "2026-03-18"},
+    {"id": 11, "cliente": "Maria Silva", "nr_processo": "0809876-12", "data_contrato": "2026-05-02"},
+])
+_mapa = fin._mapa_contratos(_repetido)
+r.checar("nome repetido não perde contrato", len(_mapa), 2)
+r.checar("ids preservados", sorted(_mapa.values()), [9, 11])
+r.verdadeiro("desempate usa o processo", any("0801234-55" in k for k in _mapa))
+
+_sem_processo = pd.DataFrame([
+    {"id": 9, "cliente": "Maria Silva", "nr_processo": "", "data_contrato": "2026-03-18"},
+    {"id": 11, "cliente": "Maria Silva", "nr_processo": "", "data_contrato": "2026-05-02"},
+])
+_mapa = fin._mapa_contratos(_sem_processo)
+r.checar("sem processo, desempata pela data", len(_mapa), 2)
+r.verdadeiro("data no rótulo", any("18/03/2026" in k for k in _mapa))
+
+_iguais = pd.DataFrame([
+    {"id": 9, "cliente": "Maria Silva", "nr_processo": "", "data_contrato": ""},
+    {"id": 11, "cliente": "Maria Silva", "nr_processo": "", "data_contrato": ""},
+])
+r.checar("idênticos em tudo ainda coexistem", len(fin._mapa_contratos(_iguais)), 2)
+
+
 sys.exit(r.encerrar())
