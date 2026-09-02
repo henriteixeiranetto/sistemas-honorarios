@@ -532,14 +532,18 @@ def escalar(query: str, params: Sequence = (), padrao: Any = 0) -> Any:
 # 5. SCHEMA
 # =============================================================================
 DDL_CONTRATOS = """
+-- Os tipos abaixo espelham o banco de produção, conferido via
+-- information_schema. Não é o schema "ideal" — é o real, de propósito: um
+-- ambiente de teste criado do zero precisa reproduzir produção, senão não
+-- pega os erros que importam. O migracoes.sql cuida de corrigir o resto.
 CREATE TABLE IF NOT EXISTS contratos (
     id                      SERIAL PRIMARY KEY,
     cliente                 TEXT NOT NULL,
     cpf_cnpj                TEXT,
     telefone                TEXT,
-    valor_total             REAL NOT NULL,
-    saldo_devedor           REAL NOT NULL,
-    data_contrato           TEXT NOT NULL,
+    valor_total             NUMERIC NOT NULL,
+    saldo_devedor           NUMERIC NOT NULL,
+    data_contrato           DATE NOT NULL,
     observacoes             TEXT,
     hon_inicial_ativo       TEXT,
     hon_inicial_valor       REAL,
@@ -564,9 +568,9 @@ CREATE TABLE IF NOT EXISTS parcelas (
     id              SERIAL PRIMARY KEY,
     contrato_id     INTEGER NOT NULL REFERENCES contratos(id) ON DELETE CASCADE,
     nr_parcela      INTEGER NOT NULL,
-    valor_parcela   REAL NOT NULL,
-    data_vencimento TEXT NOT NULL,
-    data_pagamento  TEXT,
+    valor_parcela   NUMERIC NOT NULL,
+    data_vencimento DATE NOT NULL,
+    data_pagamento  TIMESTAMP,
     pago            INTEGER DEFAULT 0,
     forma_pagamento TEXT
 )
@@ -1383,17 +1387,17 @@ ORDER BY vencimento ASC
 
 SQL_RECEBIMENTOS_MES = """
 SELECT mes, SUM(total) AS total FROM (
-    SELECT LEFT(data_pagamento::text, 7) AS mes, SUM(valor_parcela) AS total
+    SELECT LEFT(data_pagamento::text, 7) AS mes, SUM(valor_parcela::numeric) AS total
     FROM parcelas
     WHERE pago = 1 AND data_pagamento IS NOT NULL AND data_pagamento::text <> ''
     GROUP BY 1
     UNION ALL
-    SELECT LEFT(data_pagamento::text, 7), SUM(valor_parcela)
+    SELECT LEFT(data_pagamento::text, 7), SUM(valor_parcela::numeric)
     FROM parcelas_liminar
     WHERE pago = 1 AND data_pagamento IS NOT NULL AND data_pagamento::text <> ''
     GROUP BY 1
     UNION ALL
-    SELECT LEFT(exito_data_pagamento::text, 7), SUM(exito_valor_recebido)
+    SELECT LEFT(exito_data_pagamento::text, 7), SUM(exito_valor_recebido::numeric)
     FROM contratos
     WHERE COALESCE(exito_pago, 0) = 1
       AND exito_data_pagamento IS NOT NULL AND exito_data_pagamento::text <> ''

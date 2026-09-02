@@ -39,44 +39,56 @@ GROUP BY c.id, c.cliente, c.saldo_devedor
 HAVING ABS(c.saldo_devedor - COALESCE(SUM(p.valor_parcela) FILTER (WHERE p.pago = 0), 0)) > 0.01
 ORDER BY ABS(c.saldo_devedor - COALESCE(SUM(p.valor_parcela) FILTER (WHERE p.pago = 0), 0)) DESC;
 
+-- 1.4 Que tipo tem cada coluna? (foi daqui que sairam os erros de UNION)
+SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name IN ('contratos', 'parcelas', 'parcelas_liminar')
+ORDER BY table_name, ordinal_position;
+
 -- 1.3 Contratos cuja observação virou "Pago" pelo bug antigo
 --     (o texto original da anotação foi perdido; só dá para limpar o rótulo)
 SELECT id, cliente, observacoes FROM contratos WHERE observacoes = 'Pago';
 
 
 -- -----------------------------------------------------------------------------
--- 2) DINHEIRO EM NUMERIC  — RECOMENDADO
+-- 2) TERMINAR A MIGRACAO DO DINHEIRO PARA NUMERIC  — RECOMENDADO
 --
--- Hoje os valores são REAL (float de 4 bytes, ~7 dígitos significativos).
--- Isso arredonda errado a partir de valores altos: R$ 1.234.567,89 não é
--- representável exatamente. NUMERIC(14,2) é o tipo correto para dinheiro.
+-- Conferido no banco em 02/09/2026 via information_schema. A migracao ja foi
+-- feita PELA METADE em algum momento:
 --
--- O código Python já está preparado: ele registra um conversor que devolve
--- NUMERIC como float, então nada quebra depois da migração.
+--   Ja estao em numeric:  contratos.valor_total, contratos.saldo_devedor,
+--                         parcelas.valor_parcela
+--   Ainda em real:        parcelas_liminar.valor_parcela e todas as colunas
+--                         hon_* e exito_valor_recebido de contratos
+--
+-- Isso e incoerente: valor de parcela e numeric em `parcelas` e real em
+-- `parcelas_liminar`. E `real` e float de 4 bytes, com ~7 digitos de
+-- precisao: a partir da casa do milhao ele arredonda errado.
+--
+-- O codigo Python ja aceita os dois tipos (ha um conversor que devolve
+-- numeric como float), entao nada quebra depois de rodar.
 -- -----------------------------------------------------------------------------
 BEGIN;
 
 ALTER TABLE contratos
-    ALTER COLUMN valor_total             TYPE NUMERIC(14,2) USING ROUND(valor_total::numeric, 2),
-    ALTER COLUMN saldo_devedor           TYPE NUMERIC(14,2) USING ROUND(saldo_devedor::numeric, 2),
     ALTER COLUMN hon_inicial_valor       TYPE NUMERIC(14,2) USING ROUND(hon_inicial_valor::numeric, 2),
     ALTER COLUMN hon_inicial_vlr_parcela TYPE NUMERIC(14,2) USING ROUND(hon_inicial_vlr_parcela::numeric, 2),
     ALTER COLUMN hon_liminar_fixo        TYPE NUMERIC(14,2) USING ROUND(hon_liminar_fixo::numeric, 2),
     ALTER COLUMN hon_liminar_reducao_vlr TYPE NUMERIC(14,2) USING ROUND(hon_liminar_reducao_vlr::numeric, 2),
     ALTER COLUMN hon_exito_fixo          TYPE NUMERIC(14,2) USING ROUND(hon_exito_fixo::numeric, 2),
-    ALTER COLUMN hon_exito_percentual    TYPE NUMERIC(6,2)  USING ROUND(hon_exito_percentual::numeric, 2),
-    ALTER COLUMN exito_valor_recebido    TYPE NUMERIC(14,2) USING ROUND(exito_valor_recebido::numeric, 2);
-
-ALTER TABLE parcelas
-    ALTER COLUMN valor_parcela TYPE NUMERIC(14,2) USING ROUND(valor_parcela::numeric, 2);
+    ALTER COLUMN exito_valor_recebido    TYPE NUMERIC(14,2) USING ROUND(exito_valor_recebido::numeric, 2),
+    ALTER COLUMN hon_exito_percentual    TYPE NUMERIC(6,2)  USING ROUND(hon_exito_percentual::numeric, 2);
 
 ALTER TABLE parcelas_liminar
     ALTER COLUMN valor_parcela TYPE NUMERIC(14,2) USING ROUND(valor_parcela::numeric, 2);
 
 COMMIT;
 
+-- Confira depois com a consulta 1.4 no fim deste arquivo: nenhuma coluna de
+-- valor deve continuar como `real`.
 
--- -----------------------------------------------------------------------------
+
 -- 3) REGRAS DE INTEGRIDADE  — RECOMENDADO
 --
 -- Impedem que dados inconsistentes entrem no banco, mesmo por engano.

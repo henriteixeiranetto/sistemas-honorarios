@@ -109,18 +109,38 @@ PARCELAS_LIMINAR = pd.DataFrame([
      "data_prevista": _d(18), "data_pagamento": "", "pago": 0},
 ])
 
-# Reproduz a mistura de tipos que existe no banco real — é dela que vieram
-# os erros de UNION e de COALESCE.
-ESTRUTURA = pd.DataFrame([
-    {"table_name": "parcelas", "column_name": "data_vencimento",
-     "data_type": "date", "is_nullable": "NO", "column_default": None},
-    {"table_name": "parcelas", "column_name": "data_pagamento",
-     "data_type": "timestamp without time zone", "is_nullable": "YES", "column_default": None},
-    {"table_name": "parcelas_liminar", "column_name": "data_prevista",
-     "data_type": "text", "is_nullable": "NO", "column_default": None},
-    {"table_name": "contratos", "column_name": "quitado_em",
-     "data_type": "text", "is_nullable": "YES", "column_default": None},
-])
+# Espelha o schema real de produção (conferido em 02/09/2026). A mistura de
+# tipos aqui não é descuido: é dela que vieram os erros de UNION e COALESCE.
+ESTRUTURA = pd.DataFrame(
+    [
+        {"table_name": t, "column_name": c, "data_type": d, "is_nullable": n,
+         "column_default": None}
+        for t, c, d, n in [
+            ("contratos", "id", "integer", "NO"),
+            ("contratos", "cliente", "text", "NO"),
+            ("contratos", "cpf_cnpj", "text", "YES"),
+            ("contratos", "telefone", "text", "YES"),
+            ("contratos", "valor_total", "numeric", "NO"),
+            ("contratos", "saldo_devedor", "numeric", "NO"),
+            ("contratos", "data_contrato", "date", "NO"),
+            ("contratos", "observacoes", "text", "YES"),
+            ("contratos", "hon_inicial_valor", "real", "YES"),
+            ("contratos", "hon_liminar_reducao_vlr", "real", "YES"),
+            ("contratos", "hon_exito_fixo", "real", "YES"),
+            ("contratos", "exito_data_pagamento", "text", "YES"),
+            ("contratos", "exito_valor_recebido", "real", "YES"),
+            ("contratos", "quitado_em", "text", "YES"),
+            ("parcelas", "valor_parcela", "numeric", "NO"),
+            ("parcelas", "data_vencimento", "date", "NO"),
+            ("parcelas", "data_pagamento", "timestamp without time zone", "YES"),
+            ("parcelas", "pago", "integer", "YES"),
+            ("parcelas_liminar", "valor_parcela", "real", "NO"),
+            ("parcelas_liminar", "data_prevista", "text", "NO"),
+            ("parcelas_liminar", "data_pagamento", "text", "YES"),
+            ("parcelas_liminar", "pago", "integer", "YES"),
+        ]
+    ]
+)
 
 
 def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
