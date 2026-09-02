@@ -1483,10 +1483,10 @@ INSERT INTO contratos
      observacoes, tutela,
      hon_inicial_ativo, hon_inicial_valor, hon_inicial_parcelado,
      hon_inicial_parcelas, hon_inicial_vlr_parcela,
-     hon_liminar_fixo, hon_liminar_reducao_vlr, hon_liminar_reducao_prc,
+     hon_liminar_reducao_vlr, hon_liminar_reducao_prc,
      hon_exito_percentual, hon_exito_fixo,
      nr_processo, nr_vara, nome_juiz, comarca)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 RETURNING id
 """
 
@@ -1811,21 +1811,24 @@ def pagina_novo_contrato() -> None:
 
     st.divider()
 
+    # O campo "Honorários Fixos da Liminar" foi retirado a pedido do
+    # escritório: o valor nunca foi cobrado por ali e o sistema não tinha tela
+    # para recebê-lo. O que vale é o total da redução, dividido em parcelas.
+    # A coluna hon_liminar_fixo continua no banco, com o que já foi digitado.
     st.subheader("⚖️ Honorários da Liminar")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     tutela = col1.selectbox("Status da Tutela", STATUS_TUTELA)
-    liminar_fixo = col2.number_input(
-        "Honorários Fixos da Liminar (R$)", min_value=0.0, step=100.0, format="%.2f", key="novo_lim_fixo"
-    )
-    col3, col4 = st.columns(2)
-    reducao_valor = col3.number_input(
-        "Valor Efetivo da Redução Obtida (R$)", min_value=0.0, step=100.0, format="%.2f", key="novo_red_vlr"
+    reducao_valor = col2.number_input(
+        "Valor Total da Redução (R$)", min_value=0.0, step=100.0, format="%.2f",
+        key="novo_red_vlr", help="Valor total obtido com a liminar. Será dividido nas parcelas abaixo.",
     )
     reducao_parcelas = int(
-        col4.number_input(
+        col3.number_input(
             "Nº de Parcelas da Redução", min_value=0, max_value=360, value=0, step=1, key="novo_red_prc"
         )
     )
+    if reducao_valor > 0 and reducao_parcelas > 0:
+        resumo_parcelamento(reducao_valor, reducao_parcelas, "Total da redução")
 
     st.divider()
 
@@ -1894,7 +1897,6 @@ def pagina_novo_contrato() -> None:
                 ini_parcelado,
                 quantidade if ini_parcelado == "Sim" else None,
                 valor_parcela if ini_parcelado == "Sim" else None,
-                liminar_fixo or None,
                 reducao_valor or None,
                 reducao_parcelas or None,
                 exito_pct or None,
@@ -2528,19 +2530,14 @@ def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
         )
 
         st.subheader("⚖️ Honorários da Liminar")
-        col9, col10 = st.columns(2)
+        col9, col11, col12 = st.columns(3)
         tutela_nova = col9.selectbox(
             "Status da Tutela", STATUS_TUTELA,
             index=STATUS_TUTELA.index(tutela) if tutela in STATUS_TUTELA else 0,
             key=f"ed_tutela_{contrato_id}",
         )
-        liminar_fixo = col10.number_input(
-            "Honorários Fixos da Liminar (R$)", min_value=0.0, step=100.0, format="%.2f",
-            value=float(contrato.get("hon_liminar_fixo") or 0), key=f"ed_lim_fixo_{contrato_id}",
-        )
-        col11, col12 = st.columns(2)
         reducao_valor = col11.number_input(
-            "Valor da Redução Obtida (R$)", min_value=0.0, step=100.0, format="%.2f",
+            "Valor Total da Redução (R$)", min_value=0.0, step=100.0, format="%.2f",
             value=float(contrato.get("hon_liminar_reducao_vlr") or 0), key=f"ed_red_vlr_{contrato_id}",
         )
         reducao_parcelas = int(
@@ -2605,7 +2602,6 @@ def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
                 hon_inicial_parcelas    = %s,
                 hon_inicial_vlr_parcela = %s,
                 tutela                  = %s,
-                hon_liminar_fixo        = %s,
                 hon_liminar_reducao_vlr = %s,
                 hon_liminar_reducao_prc = %s,
                 hon_exito_percentual    = %s,
@@ -2630,7 +2626,6 @@ def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
                 ini_qtd or None,
                 valor_parcela or None,
                 tutela_nova,
-                liminar_fixo or None,
                 reducao_valor or None,
                 reducao_parcelas or None,
                 exito_pct or None,
