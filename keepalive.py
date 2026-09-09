@@ -60,6 +60,14 @@ except Exception:  # pragma: no cover
 
 TEMPO_LIMITE = 20
 
+NOMES_CHAVE = (
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_PUBLISHABLE_KEY",
+    "SUPABASE_PUBLIC_KEY",
+    "SUPABASE_API_KEY",
+    "SUPABASE_KEY",
+)
+
 
 def _agora() -> str:
     return datetime.now(FUSO).strftime("%d/%m/%Y %H:%M:%S")
@@ -106,15 +114,17 @@ def _chave_publica() -> str:
     cabeçalho `apikey`, então o script aceita ambas e não força um nome de
     variável específico.
     """
-    for nome in (
-        "SUPABASE_ANON_KEY",
-        "SUPABASE_PUBLISHABLE_KEY",
-        "SUPABASE_PUBLIC_KEY",
-        "SUPABASE_API_KEY",
-    ):
+    for nome in NOMES_CHAVE:
         valor = os.environ.get(nome, "").strip()
         if valor:
+            _log(f"Chave pública encontrada em {nome}.")
             return valor
+
+    # Diagnóstico: sem isto, "não achei a chave" não diz onde procurar. Só os
+    # NOMES das variáveis são registrados — nunca os valores.
+    presentes = sorted(n for n in os.environ if n.startswith("SUPABASE"))
+    _log(f"Nenhuma chave pública definida. Procurei em: {', '.join(NOMES_CHAVE)}.")
+    _log(f"Variáveis SUPABASE* presentes neste serviço: {', '.join(presentes) or 'nenhuma'}.")
     return ""
 
 
