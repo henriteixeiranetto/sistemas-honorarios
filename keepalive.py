@@ -114,17 +114,32 @@ def _chave_publica() -> str:
     cabeçalho `apikey`, então o script aceita ambas e não força um nome de
     variável específico.
     """
+    # Compara ignorando caixa e espaços, para um nome colado com espaço
+    # sobrando não inviabilizar tudo.
+    normalizado = {n.strip().upper(): v for n, v in os.environ.items()}
     for nome in NOMES_CHAVE:
-        valor = os.environ.get(nome, "").strip()
+        valor = (normalizado.get(nome) or "").strip()
         if valor:
             _log(f"Chave pública encontrada em {nome}.")
             return valor
 
     # Diagnóstico: sem isto, "não achei a chave" não diz onde procurar. Só os
     # NOMES das variáveis são registrados — nunca os valores.
-    presentes = sorted(n for n in os.environ if n.startswith("SUPABASE"))
     _log(f"Nenhuma chave pública definida. Procurei em: {', '.join(NOMES_CHAVE)}.")
-    _log(f"Variáveis SUPABASE* presentes neste serviço: {', '.join(presentes) or 'nenhuma'}.")
+
+    # Busca ampla: pega nome com espaço sobrando, caixa diferente ou grafia
+    # levemente distinta — casos em que a variável existe no painel mas o
+    # programa não a encontra. Os nomes vão entre colchetes para o espaço
+    # invisível aparecer no log.
+    suspeitas = sorted(
+        n for n in os.environ
+        if any(t in n.upper() for t in ("SUPA", "ANON", "KEY", "PUBLISH"))
+    )
+    if suspeitas:
+        _log("Variáveis parecidas encontradas: " + ", ".join(f"[{n}]" for n in suspeitas))
+    else:
+        _log("Nenhuma variável parecida com chave neste serviço.")
+    _log(f"Total de variáveis de ambiente no contêiner: {len(os.environ)}.")
     return ""
 
 
