@@ -24,6 +24,35 @@ Ou seja, ele **não** protege nestes casos:
 Por isso existe o `keepalive.py`: um script independente, que não depende do
 site estar de pé nem de alguém tê-lo aberto.
 
+## O que conta como atividade
+
+**A primeira versão deste script só abria conexão com o Postgres — e o
+projeto pausou mesmo assim.**
+
+A documentação da Supabase é vaga: fala em "atividade suficiente do banco",
+sem dizer se conexão direta ao Postgres conta ou se só valem requisições à
+API. A evidência prática diz que conexão Postgres sozinha não basta.
+
+Por isso o script agora bate nas **duas portas**:
+
+1. `SELECT` numa tabela real, pela conexão Postgres
+2. Requisição HTTP à API REST do projeto
+
+A requisição HTTP conta sob qualquer interpretação. A consulta ao Postgres
+fica porque confirma que o banco responde de fato — útil como diagnóstico.
+
+### SUPABASE_ANON_KEY (opcional, mas recomendada)
+
+Sem ela o script alcança a API e leva 401, o que provavelmente já conta.
+Com ela, a requisição é legítima e não há dúvida.
+
+É a chave **pública** do projeto — a mesma que iria num app de navegador.
+Pegue em **Supabase → Project Settings → API → Project API keys → `anon public`**
+e cadastre como variável no serviço do keep-alive.
+
+O identificador do projeto é deduzido sozinho do `SUPABASE_USER`
+(`postgres.<ref>`). Só defina `SUPABASE_REF` se o log disser que não conseguiu.
+
 ---
 
 ## Opção A — Cron Job no Railway (recomendada)

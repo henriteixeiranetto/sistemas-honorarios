@@ -15,7 +15,7 @@ import subprocess
 import sys
 
 AQUI = pathlib.Path(__file__).resolve().parent
-SUITES = ["teste_funcoes.py", "teste_banco.py", "teste_sql.py"]
+SUITES = ["teste_funcoes.py", "teste_banco.py", "teste_sql.py", "teste_keepalive.py"]
 
 # Sem isto, dependência faltando vira um traceback por suíte no meio do log e
 # um resumo que só diz "falhou" — sem dizer o que fazer.
