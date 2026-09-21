@@ -139,3 +139,6 @@ testar o caminho completo sem tocar nos contratos reais.
   necessário para o sistema funcionar no dia a dia.
 - **`keepalive.py`** e **`README-keepalive.md`** — como evitar que o Supabase
   pause o projeto por inatividade no plano gratuito.
+- **`notificar.py`** e **`README-notificacoes.md`** — aviso diário das parcelas
+  que vencem no dia, por e-mail, Telegram ou WhatsApp. Roda como Cron Job do
+  Railway e não repete aviso no mesmo dia.
