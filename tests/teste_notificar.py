@@ -142,4 +142,87 @@ r.checar("grava o canal usado", conexao.cur.inseridos[0][-1], "e-mail")
 r.checar("grava o dia do aviso", conexao.cur.inseridos[0][-2], HOJE.isoformat())
 
 
+r.secao("[6] Envio por e-mail — caminho completo, com SMTP simulado")
+
+
+class _SmtpFalso:
+    """Registra o que o smtplib receberia, sem abrir conexão de verdade."""
+
+    ultima = None
+
+    def __init__(self, host, porta, timeout=None):
+        self.host, self.porta = host, porta
+        self.chamadas = []
+        self.mensagem = None
+        _SmtpFalso.ultima = self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def starttls(self):
+        self.chamadas.append("starttls")
+
+    def login(self, usuario, senha):
+        self.chamadas.append(("login", usuario, senha))
+
+    def send_message(self, mensagem):
+        self.chamadas.append("send_message")
+        self.mensagem = mensagem
+
+
+import smtplib  # noqa: E402
+
+_original = smtplib.SMTP
+smtplib.SMTP = _SmtpFalso
+os.environ.update(
+    NOTIFICAR_EMAIL_PARA="tahilzi@exemplo.test",
+    SMTP_HOST="smtp.gmail.com",
+    SMTP_PORTA="587",
+    SMTP_USUARIO="sistema@exemplo.test",
+    SMTP_SENHA="senha-de-app",
+)
+try:
+    enviado = nt.enviar_email(assunto, corpo2)
+finally:
+    smtplib.SMTP = _original
+
+env = _SmtpFalso.ultima
+r.checar("envio reportado como sucesso", enviado, True)
+r.checar("conectou no servidor certo", env.host, "smtp.gmail.com")
+r.checar("porta certa", env.porta, 587)
+r.verdadeiro("usou STARTTLS antes de autenticar", env.chamadas[0] == "starttls")
+r.checar("autenticou com o usuário configurado", env.chamadas[1][1], "sistema@exemplo.test")
+r.verdadeiro("enviou a mensagem", "send_message" in env.chamadas)
+
+r.checar("destinatário correto", env.mensagem["To"], "tahilzi@exemplo.test")
+r.checar("remetente correto", env.mensagem["From"], "sistema@exemplo.test")
+r.verdadeiro("assunto preenchido", "Vencimentos de hoje" in env.mensagem["Subject"])
+
+texto = env.mensagem.get_content()
+r.verdadeiro("corpo traz o cliente", "José Caverna" in texto)
+r.verdadeiro("corpo traz o valor em pt-BR", "R$ 3.775,00" in texto)
+# O asterisco é marcação do WhatsApp; no e-mail seria ruído visível.
+r.verdadeiro("asteriscos removidos no e-mail", "*" not in texto)
+
+r.secao("[7] Falha de envio não é reportada como sucesso")
+
+
+class _SmtpQuebrado(_SmtpFalso):
+    def login(self, usuario, senha):
+        raise smtplib.SMTPAuthenticationError(535, b"senha invalida")
+
+
+smtplib.SMTP = _SmtpQuebrado
+try:
+    falhou = nt.enviar_email("a", "b")
+finally:
+    smtplib.SMTP = _original
+# Falso, e não None: None significaria "canal não configurado", e aí o aviso
+# seria marcado como entregue sem ter sido.
+r.checar("erro de autenticação devolve False", falhou, False)
+
+
 sys.exit(r.encerrar())
