@@ -79,15 +79,52 @@ TELEGRAM_CHAT_ID=<o id copiado>
 
 ## Opção C — WhatsApp (API oficial da Meta)
 
-Só siga se o escritório aceitar a burocracia descrita no início.
+### Antes de tudo: app e API são coisas diferentes
+
+**WhatsApp Business** (o app verde, gratuito) e **WhatsApp Business Platform**
+(a Cloud API) não são a mesma coisa. Ter o app instalado não dá acesso à API.
+
+E o ponto que mais dói: **ao registrar um número na Cloud API, ele deixa de
+funcionar no app.** A partir dali o número é só programático.
+
+> **Não registre na API o número que o escritório usa para falar com
+> clientes.** Ele seria perdido para o uso normal.
+
+### Quem envia e quem recebe
+
+O aviso é interno — vai do sistema **para** o escritório. Isso separa bem os
+papéis:
+
+| Papel | Número | Exigência |
+|---|---|---|
+| Recebe o aviso | o do escritório (+55 81 99185-3938) | nenhuma; segue normal no app |
+| Envia o aviso | outro número | esse sim fica dedicado à API |
+
+Só o remetente fica preso à API. O destinatário é um número de WhatsApp
+qualquer.
+
+### De onde tirar o número remetente
+
+**Opção 1 — número de teste da Meta (grátis, para experimentar).**
+Ao criar o app no Meta for Developers, a Meta fornece um número de teste já
+pronto, que envia para até 5 destinatários cadastrados por você. Para um aviso
+interno a um único número, costuma bastar para validar a ideia sem custo e sem
+verificação de negócio. É um ambiente de desenvolvimento: sirva-se dele para
+testar, não como solução definitiva.
+
+**Opção 2 — um chip novo (produção).**
+Uma linha pré-paga barata resolve. Esse número passa a ser do sistema, nunca
+mais é aberto no app, e o do escritório fica intacto.
+
+### Configuração
 
 1. Crie uma conta no **Meta for Developers** e um app do tipo *Business*
 2. Adicione o produto **WhatsApp**
-3. Cadastre e verifique o número que vai **enviar** — lembre que ele não
-   poderá mais ser usado no app comum
-4. Gere um **token de acesso permanente** (o token de teste expira em 24h)
-5. Em **Modelos de mensagem**, crie um modelo e aguarde a aprovação. Exemplo,
-   com três variáveis na ordem que o script envia — data, quantidade, total:
+3. Use o número de teste, ou cadastre e verifique o número remetente
+4. Gere um **token de acesso permanente** (o de teste expira em 24h)
+5. Fora da janela de 24h, a Meta exige **modelo aprovado**. Crie um em
+   *Modelos de mensagem*, com três variáveis na ordem que o script envia —
+   data, quantidade e total:
 
    ```
    Vencimentos de {{1}}: {{2}} parcela(s), somando {{3}}.
@@ -96,17 +133,17 @@ Só siga se o escritório aceitar a burocracia descrita no início.
 
 ```
 WHATSAPP_TOKEN=<token permanente>
-WHATSAPP_PHONE_ID=<id do número remetente>
-WHATSAPP_PARA=5581995301233
+WHATSAPP_PHONE_ID=<id do número remetente, dado pela Meta>
+WHATSAPP_PARA=5581991853938
 WHATSAPP_TEMPLATE=<nome do modelo aprovado>
 ```
 
-O `WHATSAPP_PARA` vai **só com dígitos**, incluindo o 55 do país. Confira o
-nono dígito: celulares brasileiros têm 9 dígitos depois do DDD.
+O `WHATSAPP_PARA` vai **só com dígitos**, com o 55 do país e o nono dígito do
+celular. Para +55 81 99185-3938, fica `5581991853938`.
 
 Sem `WHATSAPP_TEMPLATE` o script tenta texto livre, que a Meta só aceita
-dentro de 24h da última mensagem que **você** recebeu daquele número. Serve
-para testar, não para um aviso diário.
+dentro de 24h da última mensagem que o remetente **recebeu** daquele número.
+Serve para testar, não para um aviso diário.
 
 ---
 
