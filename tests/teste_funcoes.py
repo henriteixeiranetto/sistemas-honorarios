@@ -375,4 +375,52 @@ finally:
     fin.select_db = _original
 
 
+r.secao("[17] Contrato pago que continua na lista por causa do êxito")
+# Relatado pelo escritório: contrato com "Pago: 100,0%" e "A Receber R$ 0,00"
+# aparecendo entre os pendentes. Está certo — falta o êxito, que não tem valor
+# conhecido — mas sem explicação parece defeito do sistema.
+
+QUITADO = {"total": 4248.44, "recebido": 4248.44, "falta": 0.0, "proporcao": 1.0}
+DEVENDO = {"total": 9000.0, "recebido": 6000.0, "falta": 3000.0, "proporcao": 2 / 3}
+
+
+def _aviso(contrato, resumo=None):
+    return fin.falta_so_exito(contrato, resumo or QUITADO)
+
+
+so_exito = {"exito_pago": 0, "hon_exito_percentual": 20, "hon_exito_fixo": 0}
+texto = _aviso(so_exito)
+r.verdadeiro("avisa quando só falta o êxito", bool(texto))
+r.verdadeiro("diz o percentual combinado", "20,0%" in texto)
+r.verdadeiro("aponta a aba de êxito", "Êxito" in texto)
+r.verdadeiro("oferece arquivar", "Arquivar" in texto)
+
+# Ainda há parcela a receber: o contrato está na lista pelo motivo óbvio.
+r.checar("não avisa quando ainda falta dinheiro", _aviso(so_exito, DEVENDO), "")
+
+r.checar(
+    "não avisa com êxito já recebido",
+    _aviso({"exito_pago": 1, "hon_exito_percentual": 20, "hon_exito_fixo": 0}),
+    "",
+)
+r.checar(
+    "não avisa quando não há êxito combinado",
+    _aviso({"exito_pago": 0, "hon_exito_percentual": 0, "hon_exito_fixo": 0}),
+    "",
+)
+
+# Êxito de valor fixo: mostra o valor, não um percentual.
+fixo = _aviso({"exito_pago": 0, "hon_exito_percentual": 0, "hon_exito_fixo": 45000})
+r.verdadeiro("êxito fixo aparece como valor", "45.000,00" in fixo)
+# O markdown do Streamlit leria "R$ ... $" como fórmula LaTeX.
+r.verdadeiro("cifrão escapado para o markdown", r"R\$" in fixo)
+
+r.checar("campos ausentes não quebram", _aviso({}), "")
+r.checar(
+    "valor nulo vindo do banco não quebra",
+    _aviso({"exito_pago": None, "hon_exito_percentual": None, "hon_exito_fixo": None}),
+    "",
+)
+
+
 sys.exit(r.encerrar())

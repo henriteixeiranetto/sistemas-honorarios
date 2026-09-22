@@ -138,6 +138,24 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "quitado_em": "", "arquivado_em": None,
 }])], ignore_index=True)
 
+# Redução inteira recebida, mas o êxito por percentual continua em aberto: o
+# contrato fecha em 100% e mesmo assim segue na lista de Pagamentos. Foi o que
+# o escritório estranhou — a tela precisa explicar isso sozinha.
+CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
+    "id": 34, "cliente": "Essências Vitória Ltda", "cpf_cnpj": "16.630.404/0001-07",
+    "telefone": "", "valor_total": 0.0, "saldo_devedor": 0.0,
+    "data_contrato": _d(-250), "observacoes": "", "tutela": "Deferido",
+    "hon_inicial_ativo": "Não", "hon_inicial_valor": 0.0,
+    "hon_inicial_parcelado": "Não", "hon_inicial_parcelas": 1,
+    "hon_inicial_vlr_parcela": 0.0, "hon_liminar_fixo": 0.0,
+    "hon_liminar_reducao_vlr": 4248.44, "hon_liminar_reducao_prc": 1,
+    "hon_exito_percentual": 20.0, "hon_exito_fixo": 0.0,
+    "nr_processo": "0005995-49.2026.8.17.2001", "nr_vara": "12ª Vara Cível",
+    "nome_juiz": "", "comarca": "Recife",
+    "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
+    "quitado_em": _d(-20), "arquivado_em": None,
+}])], ignore_index=True)
+
 PARCELAS = pd.DataFrame([
     {"id": 1, "contrato_id": 9, "nr_parcela": 1, "valor_parcela": 3775.0,
      "data_vencimento": _d(-120), "data_pagamento": _d(-118) + " 10:22:00",
@@ -164,6 +182,9 @@ PARCELAS_LIMINAR = pd.DataFrame([
      "data_prevista": _d(-29), "data_pagamento": _d(-9), "pago": 1},
     {"id": 6, "contrato_id": 30, "nr_parcela": 3, "valor_parcela": 3000.0,
      "data_prevista": _d(2), "data_pagamento": "", "pago": 0},
+    # Essências Vitória: recebida por inteiro — só o êxito segue em aberto.
+    {"id": 7, "contrato_id": 34, "nr_parcela": 1, "valor_parcela": 4248.44,
+     "data_prevista": _d(-40), "data_pagamento": _d(-20), "pago": 1},
 ])
 
 # Espelha o schema real de produção. As datas continuam em três tipos

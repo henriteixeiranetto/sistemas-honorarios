@@ -1653,6 +1653,45 @@ def resumo_financeiro(contrato_id: int) -> dict[str, float]:
     return totais_contrato(df.iloc[0])
 
 
+def falta_so_exito(contrato: Any, resumo: dict[str, float]) -> str:
+    """Explica o contrato que aparece 100% pago e mesmo assim continua na lista.
+
+    O êxito por percentual não tem valor conhecido antes do fim da causa, então
+    fica fora do total: a barra fecha em 100%, "A Receber" mostra R$ 0,00 — e o
+    contrato segue pendente, porque o êxito ainda não foi registrado. Visto de
+    fora parece defeito, e o escritório perguntou duas vezes.
+
+    Devolve o texto do aviso, ou vazio quando não é esse caso.
+    """
+    if resumo["falta"] > 0 or int(_numero(contrato, "exito_pago")) == 1:
+        return ""
+
+    percentual = _numero(contrato, "hon_exito_percentual")
+    fixo = _numero(contrato, "hon_exito_fixo")
+    if percentual <= 0 and fixo <= 0:
+        return ""
+
+    combinado = (
+        f"{porcentagem(percentual / 100)} sobre o resultado"
+        if percentual > 0
+        else moeda_md(fixo)
+    )
+    return (
+        f"Honorários e redução **quitados**. O contrato continua na lista porque "
+        f"o **êxito ({combinado})** ainda não foi registrado.\n\n"
+        "- **Já recebeu?** Registre na aba **🏆 Êxito** — o valor entra no "
+        "relatório do mês.\n"
+        "- **Não haverá êxito a receber?** Arquive em **📂 Meus Contratos → "
+        "📁 Arquivar Contrato**, e ele sai daqui e do painel."
+    )
+
+
+def _aviso_falta_so_exito(contrato: Any, resumo: dict[str, float]) -> None:
+    texto = falta_so_exito(contrato, resumo)
+    if texto:
+        st.info(texto, icon="⚖️")
+
+
 def resumo_por_contrato() -> pd.DataFrame:
     """Os mesmos totais, de todos os contratos, numa consulta só.
 
@@ -2216,6 +2255,7 @@ def pagina_pagamentos() -> None:
     m2.metric("Já Recebido", moeda(resumo["recebido"]))
     m3.metric("A Receber", moeda(resumo["falta"]))
     st.progress(resumo["proporcao"], text=f"Pago: {porcentagem(resumo['proporcao'])}")
+    _aviso_falta_so_exito(contrato, resumo)
 
     if not nulo(contrato["observacoes"]):
         caixa(f"<b>Notas:</b> {contrato['observacoes']}", "caixa-nota")
