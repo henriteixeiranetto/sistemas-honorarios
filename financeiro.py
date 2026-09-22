@@ -1441,7 +1441,7 @@ SQL_RESUMO_CONTRATO = """
 -- Soma o contrato INTEIRO: honorários iniciais, parcelas da redução e êxito.
 -- O cabeçalho de Pagamentos olhava só para os iniciais, então um contrato que
 -- vive da liminar mostrava "Valor Total R$ 0,00" e a barra de progresso nunca
--- saía de 0%, mesmo com parcelas recebidas.
+-- saía do zero, mesmo com parcelas recebidas.
 SELECT
     COALESCE(c.valor_total, 0)::numeric                      AS inicial_total,
     (COALESCE(c.valor_total, 0) - COALESCE(c.saldo_devedor, 0))::numeric

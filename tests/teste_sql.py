@@ -26,6 +26,18 @@ except ImportError:
 
 INICIOS = ("select", "insert", "update", "delete", "create", "alter", "with", "drop")
 
+
+def sem_comentario(sql: str) -> str:
+    """Tira os comentários do topo, para reconhecer o comando que vem abaixo.
+
+    Sem isso, toda constante que começa explicando a si mesma era classificada
+    como "não é SQL" e saía da validação sem avisar ninguém.
+    """
+    linhas = sql.strip().splitlines()
+    while linhas and (not linhas[0].strip() or linhas[0].lstrip().startswith("--")):
+        linhas.pop(0)
+    return "\n".join(linhas).strip()
+
 fonte = pathlib.Path(ORIGEM).read_text(encoding="utf-8")
 arvore = ast.parse(fonte)
 
@@ -42,13 +54,13 @@ comandos: list[tuple[int, str]] = []
 for no in ast.walk(arvore):
     if isinstance(no, ast.Constant) and isinstance(no.value, str) and id(no) not in pedacos:
         texto = no.value.strip()
-        if texto.lower().startswith(INICIOS) and len(texto) > 15:
+        if sem_comentario(texto).lower().startswith(INICIOS) and len(texto) > 15:
             comandos.append((no.lineno, texto))
     elif isinstance(no, ast.JoinedStr):
         montado = "".join(
             str(v.value) if isinstance(v, ast.Constant) else "__CAMPO__" for v in no.values
         ).strip()
-        if montado.lower().startswith(INICIOS):
+        if sem_comentario(montado).lower().startswith(INICIOS):
             comandos.append((no.lineno, montado))
 
 
@@ -77,6 +89,32 @@ for linha, sql in comandos:
         falhas += 1
         print(f"  ERRO  L{linha:<5} {resumo}")
         print(f"        {erro}")
+
+# =============================================================================
+# Sinal de porcentagem solto
+# =============================================================================
+# O pglast aprova, o PostgreSQL aprovaria, e mesmo assim a consulta explode
+# antes de sair do Python: quando recebe parâmetros, o psycopg2 varre a string
+# e trata QUALQUER "%" como um espaço para argumento — inclusive um que esteja
+# dentro de um comentário. Um a mais consome o parâmetro do WHERE e o erro que
+# chega na tela é "tuple index out of range", que não aponta para lugar nenhum.
+#
+# Para escrever o símbolo de porcentagem em SQL, dobre: "%%".
+
+SOLTO = re.compile(r"%(?![s%]|\(\w+\)s)")
+
+print("\nSinal de porcentagem solto:")
+achados = 0
+for linha, sql in comandos:
+    for m in SOLTO.finditer(sql):
+        achados += 1
+        falhas += 1
+        i = sql[: m.start()].count("\n")
+        print(f"  ERRO  L{linha:<5} {sql.splitlines()[i].strip()}")
+        print('        "%" solto — dobre para "%%" ou reescreva sem ele')
+if not achados:
+    print(f"  ok    nenhum em {len(comandos)} comandos")
+
 
 # O migracoes.sql também precisa ser válido.
 migracoes = pathlib.Path(ORIGEM).parent / "migracoes.sql"
