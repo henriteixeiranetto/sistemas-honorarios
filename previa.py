@@ -120,6 +120,24 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "quitado_em": _d(-60), "arquivado_em": _d(-58),
 }])], ignore_index=True)
 
+# O caso que o escritório relatou duas vezes: contrato sem honorário inicial,
+# que vive só da redução da liminar. É aqui que o sistema mostrava R$ 0,00 no
+# painel e no cabeçalho de Pagamentos enquanto Meus Contratos mostrava certo.
+CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
+    "id": 30, "cliente": "Aromas do Recife Ltda", "cpf_cnpj": "26.556.250/0001-04",
+    "telefone": "", "valor_total": 0.0, "saldo_devedor": 0.0,
+    "data_contrato": _d(-240), "observacoes": "Concedida apenas a redução",
+    "tutela": "Parcial",
+    "hon_inicial_ativo": "Não", "hon_inicial_valor": 0.0,
+    "hon_inicial_parcelado": "Não", "hon_inicial_parcelas": 1,
+    "hon_inicial_vlr_parcela": 0.0, "hon_liminar_fixo": 0.0,
+    "hon_liminar_reducao_vlr": 9000.0, "hon_liminar_reducao_prc": 3,
+    "hon_exito_percentual": 0.0, "hon_exito_fixo": 0.0,
+    "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
+    "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
+    "quitado_em": "", "arquivado_em": None,
+}])], ignore_index=True)
+
 PARCELAS = pd.DataFrame([
     {"id": 1, "contrato_id": 9, "nr_parcela": 1, "valor_parcela": 3775.0,
      "data_vencimento": _d(-120), "data_pagamento": _d(-118) + " 10:22:00",
@@ -139,6 +157,13 @@ PARCELAS_LIMINAR = pd.DataFrame([
      "data_prevista": _d(-12), "data_pagamento": "", "pago": 0},
     {"id": 3, "contrato_id": 9, "nr_parcela": 3, "valor_parcela": 4000.0,
      "data_prevista": _d(18), "data_pagamento": "", "pago": 0},
+    # Aromas do Recife: 2 de 3 recebidas, o contrato que só tem redução.
+    {"id": 4, "contrato_id": 30, "nr_parcela": 1, "valor_parcela": 3000.0,
+     "data_prevista": _d(-60), "data_pagamento": _d(-9), "pago": 1},
+    {"id": 5, "contrato_id": 30, "nr_parcela": 2, "valor_parcela": 3000.0,
+     "data_prevista": _d(-29), "data_pagamento": _d(-9), "pago": 1},
+    {"id": 6, "contrato_id": 30, "nr_parcela": 3, "valor_parcela": 3000.0,
+     "data_prevista": _d(2), "data_pagamento": "", "pago": 0},
 ])
 
 # Espelha o schema real de produção. As datas continuam em três tipos
@@ -177,17 +202,40 @@ ESTRUTURA = pd.DataFrame(
 )
 
 
+def _componentes(contrato) -> dict:
+    """As colunas que o resumo financeiro espera, tiradas dos dados de exemplo.
+
+    Vale para o contrato sozinho e para a lista inteira — é a mesma consulta
+    escrita de duas formas no sistema.
+    """
+    parcelas = PARCELAS_LIMINAR[PARCELAS_LIMINAR["contrato_id"] == contrato["id"]]
+    return {
+        "id": int(contrato["id"]),
+        "inicial_total": float(contrato["valor_total"]),
+        "inicial_recebido": float(contrato["valor_total"]) - float(contrato["saldo_devedor"]),
+        # Sem cronograma vale o valor acordado, como no COALESCE do SQL.
+        "liminar_total": float(
+            parcelas["valor_parcela"].sum()
+            if len(parcelas) else contrato["hon_liminar_reducao_vlr"]
+        ),
+        "liminar_recebido": float(parcelas[parcelas["pago"] == 1]["valor_parcela"].sum()),
+        "exito_fixo": float(contrato["hon_exito_fixo"]),
+        "exito_recebido": float(contrato["exito_valor_recebido"]),
+        "exito_pago": int(contrato["exito_pago"]),
+        "exito_percentual": float(contrato["hon_exito_percentual"]),
+    }
+
+
 def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
     q = " ".join(query.split()).lower()
 
-    if "inicial_total" in q:            # resumo financeiro do contrato
-        # Reproduz o caso relatado: so liminar, 2 de 3 parcelas pagas.
-        return pd.DataFrame([{
-            "inicial_total": 0.0, "inicial_recebido": 0.0,
-            "liminar_total": 9000.0, "liminar_recebido": 6000.0,
-            "exito_fixo": 0.0, "exito_recebido": 0.0,
-            "exito_pago": 0, "exito_percentual": 0.0,
-        }])
+    if "inicial_total" in q and "select c.id," in q:   # resumo de TODOS os contratos
+        return pd.DataFrame([_componentes(c) for _, c in CONTRATOS.iterrows()])
+    if "inicial_total" in q:            # resumo financeiro de um contrato
+        alvo = CONTRATOS[CONTRATOS["id"] == (params[0] if params else 0)]
+        if alvo.empty:
+            return pd.DataFrame()
+        return pd.DataFrame([_componentes(alvo.iloc[0])])
     if "saldo_inicial" in q:            # pendências do contrato (arquivamento)
         alvo = CONTRATOS[CONTRATOS["id"] == (params[0] if params else 0)]
         if alvo.empty:
@@ -274,13 +322,24 @@ def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
         if "saldo_devedor > 0" in q and "exists" not in q:
             df = df[df["saldo_devedor"] > 0]
         return df
+    def _do_contrato(df):
+        """Respeita o `WHERE contrato_id = %s`.
+
+        Sem isto a prévia devolvia as parcelas de TODOS os contratos para
+        qualquer cliente — e um contrato aparecia com parcelas que não são
+        dele, escondendo justamente os erros que a prévia deveria pegar.
+        """
+        if "contrato_id = %s" in " ".join(query.split()).lower() and params:
+            return df[df["contrato_id"] == params[0]]
+        return df
+
     if principal == "parcelas_liminar":
-        df = PARCELAS_LIMINAR.copy()
+        df = _do_contrato(PARCELAS_LIMINAR.copy())
         if "pago = 0" in q:
             df = df[df["pago"] == 0]
         return df[["pago"]] if "select pago" in q else df
     if principal == "parcelas":
-        df = PARCELAS.copy()
+        df = _do_contrato(PARCELAS.copy())
         if "pago = 0" in q:
             df = df[df["pago"] == 0]
         return df

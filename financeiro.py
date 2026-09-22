@@ -228,12 +228,35 @@ st.markdown(
             text-transform: uppercase;
             letter-spacing: .07em;
             color: var(--cinza) !important;
+            white-space: normal;
+            overflow-wrap: normal;
+            word-break: keep-all;
         }
         [data-testid="stMetricValue"] {
             font-family: "Fraunces", Georgia, serif;
-            font-size: 1.42rem !important;
+            /* O Streamlit corta o valor com reticências quando não cabe, e
+               "R$ 8.77..." num sistema de honorários é pior do que nada.
+               Aqui ele diminui conforme a largura e, no pior caso, quebra a
+               linha — mas nunca esconde dígito. */
+            font-size: clamp(1.05rem, 1.15vw + .35rem, 1.42rem) !important;
             color: var(--teal-tinta);
             font-variant-numeric: tabular-nums;
+            line-height: 1.2;
+        }
+        /* O corte fica num filho do valor, não no valor em si — por isso a
+           regra precisa alcançá-lo. Sem isto o Streamlit esconde os dígitos
+           finais atrás de "…" assim que a coluna aperta. */
+        [data-testid="stMetricValue"] [data-testid="stMarkdownContainer"],
+        [data-testid="stMetricValue"] p,
+        [data-testid="stMetricLabel"] [data-testid="stMarkdownContainer"],
+        [data-testid="stMetricLabel"] p {
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            /* Quebra só onde já existe espaço: "R$" pode descer uma linha,
+               mas 1.382.167,89 nunca se parte no meio. */
+            overflow-wrap: normal !important;
+            word-break: keep-all !important;
         }
 
         button[kind="primary"] { width: 100%; height: 3em; font-weight: 600; letter-spacing: .01em; }
@@ -1460,9 +1483,13 @@ SELECT
     COALESCE(c.valor_total, 0)::numeric                      AS inicial_total,
     (COALESCE(c.valor_total, 0) - COALESCE(c.saldo_devedor, 0))::numeric
                                                              AS inicial_recebido,
+    -- Sem cronograma, vale o valor acordado da redução: o dinheiro está
+    -- combinado, só não foi agendado. Sem isto o contrato aparece valendo
+    -- R$ 0,00 até alguém criar as parcelas.
     COALESCE((SELECT SUM(pl.valor_parcela)
                 FROM parcelas_liminar pl
-               WHERE pl.contrato_id = c.id), 0)::numeric      AS liminar_total,
+               WHERE pl.contrato_id = c.id),
+             c.hon_liminar_reducao_vlr, 0)::numeric           AS liminar_total,
     COALESCE((SELECT SUM(pl.valor_parcela)
                 FROM parcelas_liminar pl
                WHERE pl.contrato_id = c.id AND pl.pago = 1), 0)::numeric
@@ -1473,6 +1500,30 @@ SELECT
     COALESCE(c.hon_exito_percentual, 0)::numeric              AS exito_percentual
 FROM contratos c
 WHERE c.id = %s
+"""
+
+SQL_RESUMO_TODOS = """
+-- As mesmas colunas do SQL_RESUMO_CONTRATO, para todos os contratos de uma
+-- vez. O painel mostra uma linha por cliente; sem isto seria uma consulta por
+-- cliente só para preencher duas colunas da tabela.
+SELECT
+    c.id,
+    COALESCE(c.valor_total, 0)::numeric                      AS inicial_total,
+    (COALESCE(c.valor_total, 0) - COALESCE(c.saldo_devedor, 0))::numeric
+                                                             AS inicial_recebido,
+    COALESCE(pl.total, c.hon_liminar_reducao_vlr, 0)::numeric AS liminar_total,
+    COALESCE(pl.recebido, 0)::numeric                        AS liminar_recebido,
+    COALESCE(c.hon_exito_fixo, 0)::numeric                   AS exito_fixo,
+    COALESCE(c.exito_valor_recebido, 0)::numeric             AS exito_recebido,
+    COALESCE(c.exito_pago, 0)                                AS exito_pago
+FROM contratos c
+LEFT JOIN (
+    SELECT contrato_id,
+           SUM(valor_parcela) AS total,
+           SUM(CASE WHEN pago = 1 THEN valor_parcela END) AS recebido
+    FROM parcelas_liminar
+    GROUP BY contrato_id
+) pl ON pl.contrato_id = c.id
 """
 
 SQL_PENDENCIAS_CONTRATO = """
@@ -1556,35 +1607,34 @@ RETURNING id
 """
 
 
-def resumo_financeiro(contrato_id: int) -> dict[str, float]:
-    """Totais do contrato inteiro: iniciais + redução da liminar + êxito.
+def _numero(linha: Any, campo: str) -> float:
+    """Campo do banco como float, sem quebrar com NULL nem com texto."""
+    try:
+        return float(linha.get(campo, 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def totais_contrato(linha: Any) -> dict[str, float]:
+    """Quanto o contrato vale e quanto já entrou: iniciais + redução + êxito.
+
+    Regra única do sistema — o cabeçalho de Pagamentos e a lista do painel
+    passam por aqui. Ter duas contas era exatamente o problema: a mesma
+    TF Perfumes aparecia com R$ 9.000,00 numa tela e R$ 0,00 na outra.
 
     O êxito por PERCENTUAL fica de fora do total enquanto não é recebido: o
     valor depende do resultado da causa e ninguém sabe quanto é. Incluí-lo
     como incógnita faria a barra nunca fechar em 100%. Depois de recebido,
     entra pelo valor real.
     """
-    df = select_db(SQL_RESUMO_CONTRATO, (contrato_id,))
-    if df.empty:
-        return {"total": 0.0, "recebido": 0.0, "falta": 0.0, "proporcao": 0.0}
+    total = _numero(linha, "inicial_total") + _numero(linha, "liminar_total")
+    recebido = _numero(linha, "inicial_recebido") + _numero(linha, "liminar_recebido")
 
-    linha = df.iloc[0]
-
-    def numero(campo: str) -> float:
-        valor = linha.get(campo, 0)
-        try:
-            return float(valor or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    total = numero("inicial_total") + numero("liminar_total")
-    recebido = numero("inicial_recebido") + numero("liminar_recebido")
-
-    if int(numero("exito_pago")) == 1:
-        total += numero("exito_recebido")
-        recebido += numero("exito_recebido")
+    if int(_numero(linha, "exito_pago")) == 1:
+        total += _numero(linha, "exito_recebido")
+        recebido += _numero(linha, "exito_recebido")
     else:
-        total += numero("exito_fixo")
+        total += _numero(linha, "exito_fixo")
 
     recebido = max(0.0, min(recebido, total))
     return {
@@ -1595,6 +1645,31 @@ def resumo_financeiro(contrato_id: int) -> dict[str, float]:
     }
 
 
+def resumo_financeiro(contrato_id: int) -> dict[str, float]:
+    """Totais de um contrato só, para o cabeçalho de Pagamentos."""
+    df = select_db(SQL_RESUMO_CONTRATO, (contrato_id,))
+    if df.empty:
+        return {"total": 0.0, "recebido": 0.0, "falta": 0.0, "proporcao": 0.0}
+    return totais_contrato(df.iloc[0])
+
+
+def resumo_por_contrato() -> pd.DataFrame:
+    """Os mesmos totais, de todos os contratos, numa consulta só.
+
+    O painel precisa disso por linha da tabela. Buscar contrato a contrato
+    seria uma ida ao banco por cliente.
+    """
+    df = select_db(SQL_RESUMO_TODOS)
+    if df.empty:
+        return pd.DataFrame(columns=["id", "total", "recebido", "falta"])
+
+    linhas = [
+        {"id": int(linha["id"]), **totais_contrato(linha)}
+        for _, linha in df.iterrows()
+    ]
+    return pd.DataFrame(linhas)[["id", "total", "recebido", "falta"]]
+
+
 def pendencias_contrato(linha: Any) -> list[str]:
     """O que impede o arquivamento, em português. Lista vazia = nada a receber.
 
@@ -1602,10 +1677,7 @@ def pendencias_contrato(linha: Any) -> list[str]:
     banco para ser conferida.
     """
     def numero(campo: str) -> float:
-        try:
-            return float(linha.get(campo, 0) or 0)
-        except (TypeError, ValueError):
-            return 0.0
+        return _numero(linha, campo)
 
     faltas: list[str] = []
     saldo = numero("saldo_inicial")
@@ -1707,9 +1779,23 @@ def pagina_dashboard() -> None:
     )
     liminar_pendente = float(df_liminar.iloc[0]["pendente"]) if not df_liminar.empty else 0.0
 
+    # Os totais do topo somavam só `valor_total` e `saldo_devedor`, que são os
+    # honorários INICIAIS. Num escritório onde a maioria dos contratos não tem
+    # cobrança inicial, o painel inteiro mostrava R$ 0,00 enquanto Meus
+    # Contratos mostrava o valor certo. Agora vem do mesmo cálculo das outras
+    # telas, ignorando o que foi arquivado.
+    resumos = resumo_por_contrato()
+    em_acompanhamento = df_contratos[
+        df_contratos.get("arquivado_em", pd.Series(dtype=object))
+        .reindex(df_contratos.index)
+        .apply(nulo)
+    ]
+    ids_visiveis = set(em_acompanhamento["id"].astype(int))
+    visiveis = resumos[resumos["id"].isin(ids_visiveis)]
+
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Honorários Contratados", moeda(df_contratos["valor_total"].sum()))
-    m2.metric("Saldo Devedor Total", moeda(df_contratos["saldo_devedor"].sum()))
+    m1.metric("Total Contratado", moeda(visiveis["total"].sum()))
+    m2.metric("Total a Receber", moeda(visiveis["falta"].sum()))
     m3.metric("Contratos Ativos", len(df_ativos))
     m4.metric("Redução a Receber", moeda(liminar_pendente))
     st.divider()
@@ -1740,14 +1826,25 @@ def pagina_dashboard() -> None:
 
         st.button("Ir para Pagamento ➡", type="primary", on_click=ir_para_pagamentos)
 
+    # "Valor Total" e "Saldo Pendente" vinham de `valor_total`/`saldo_devedor`,
+    # que só cobrem os honorários iniciais. A TF Perfumes, que vive da redução,
+    # aparecia aqui zerada enquanto Meus Contratos mostrava R$ 9.000,00.
+    por_id = resumos.set_index("id") if not resumos.empty else pd.DataFrame()
+
+    def do_resumo(contrato_id: Any, campo: str) -> float:
+        try:
+            return float(por_id.at[int(contrato_id), campo])
+        except (KeyError, ValueError, TypeError):
+            return 0.0
+
     df_visao = pd.DataFrame(
         {
             "Cliente": df_ativos["cliente"],
             "CPF/CNPJ": df_ativos["cpf_cnpj"].apply(formatar_cpf_cnpj),
             "Telefone": df_ativos["telefone"].apply(formatar_telefone),
             "Data Contrato": df_ativos["data_contrato"].apply(formatar_data),
-            "Valor Total": df_ativos["valor_total"],
-            "Saldo Pendente": df_ativos["saldo_devedor"],
+            "Valor Total": df_ativos["id"].apply(lambda i: do_resumo(i, "total")),
+            "Saldo Pendente": df_ativos["id"].apply(lambda i: do_resumo(i, "falta")),
             "Observações": df_ativos["observacoes"].apply(lambda v: "-" if nulo(v) else str(v)),
         }
     )
@@ -2102,23 +2199,23 @@ def pagina_pagamentos() -> None:
     saldo = float(contrato["saldo_devedor"])
     resumo = resumo_financeiro(contrato_id)
 
-    # Dados do cliente e situação lado a lado: antes eram quatro blocos
-    # empilhados que empurravam a ação para fora da tela.
-    col_dados, col_valores = st.columns([3, 2])
-    with col_dados:
-        processo = linha_processo(contrato)
-        caixa(
-            f"<b>{contrato['cliente']}</b><br>"
-            f"💳 {formatar_cpf_cnpj(contrato['cpf_cnpj'])} &nbsp;|&nbsp; "
-            f"📞 {formatar_telefone(contrato['telefone'])}"
-            + (f"<br><span style='font-size:.88rem;color:#43545A;'>{processo}</span>" if processo else "")
-        )
-    with col_valores:
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total do Contrato", moeda(resumo["total"]))
-        m2.metric("Já Recebido", moeda(resumo["recebido"]))
-        m3.metric("A Receber", moeda(resumo["falta"]))
-        st.progress(resumo["proporcao"], text=f"Pago: {porcentagem(resumo['proporcao'])}")
+    # Os três valores ficavam espremidos em 2/5 da largura, ao lado dos dados
+    # do cliente: "TOTAL DO CO..." e "R$ 8.77...". Um valor cortado no meio é
+    # pior do que nenhum, então eles passaram a ocupar a linha inteira — é a
+    # mesma disposição do bloco da redução em Meus Contratos.
+    processo = linha_processo(contrato)
+    caixa(
+        f"<b>{contrato['cliente']}</b><br>"
+        f"💳 {formatar_cpf_cnpj(contrato['cpf_cnpj'])} &nbsp;|&nbsp; "
+        f"📞 {formatar_telefone(contrato['telefone'])}"
+        + (f"<br><span style='font-size:.88rem;color:#43545A;'>{processo}</span>" if processo else "")
+    )
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total do Contrato", moeda(resumo["total"]))
+    m2.metric("Já Recebido", moeda(resumo["recebido"]))
+    m3.metric("A Receber", moeda(resumo["falta"]))
+    st.progress(resumo["proporcao"], text=f"Pago: {porcentagem(resumo['proporcao'])}")
 
     if not nulo(contrato["observacoes"]):
         caixa(f"<b>Notas:</b> {contrato['observacoes']}", "caixa-nota")

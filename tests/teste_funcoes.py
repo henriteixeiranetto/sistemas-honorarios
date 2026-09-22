@@ -314,4 +314,65 @@ r.checar("texto inválido não quebra", fin.pendencias_contrato({"saldo_inicial"
 r.checar("saldo negativo não é pendência", _pend(saldo_inicial=-50), [])
 
 
+r.secao("[16] Painel usa o mesmo cálculo das outras telas")
+# Regressão relatada: a tabela do painel mostrava "Valor Total R$ 0,00" e
+# "Saldo Pendente R$ 0,00" para contratos que em Meus Contratos apareciam com
+# valor. As duas telas faziam contas diferentes.
+
+LINHAS_FALSAS = [
+    # Só redução, 2 de 3 parcelas pagas — o caso da TF Perfumes.
+    {"id": 1, "inicial_total": 0, "inicial_recebido": 0,
+     "liminar_total": 9000, "liminar_recebido": 6000,
+     "exito_fixo": 0, "exito_recebido": 0, "exito_pago": 0},
+    # Iniciais + redução, para conferir que os dois somam.
+    {"id": 2, "inicial_total": 15100, "inicial_recebido": 7100,
+     "liminar_total": 12000, "liminar_recebido": 4000,
+     "exito_fixo": 0, "exito_recebido": 0, "exito_pago": 0},
+    # Contrato encerrado, êxito recebido.
+    {"id": 3, "inicial_total": 6500, "inicial_recebido": 6500,
+     "liminar_total": 0, "liminar_recebido": 0,
+     "exito_fixo": 0, "exito_recebido": 12000, "exito_pago": 1},
+]
+
+_original = fin.select_db
+fin.select_db = lambda *a, **k: pd.DataFrame(LINHAS_FALSAS)
+try:
+    painel = fin.resumo_por_contrato()
+finally:
+    fin.select_db = _original
+
+r.checar("uma linha por contrato", len(painel), 3)
+r.checar("colunas esperadas", list(painel.columns), ["id", "total", "recebido", "falta"])
+
+linha1 = painel[painel["id"] == 1].iloc[0]
+r.checar("contrato só de redução não zera", linha1["total"], 9000.0)
+r.checar("e mostra o que falta", linha1["falta"], 3000.0)
+
+linha2 = painel[painel["id"] == 2].iloc[0]
+r.checar("iniciais + redução somam", linha2["total"], 27100.0)
+r.checar("recebimentos somam", linha2["recebido"], 11100.0)
+r.checar("pendente é a diferença", linha2["falta"], 16000.0)
+
+# A soma das colunas do topo sai daqui: o painel mostra o total contratado e
+# o total a receber de todos os contratos não arquivados.
+r.checar("total contratado do painel", float(painel["total"].sum()), 54600.0)
+r.checar("total a receber do painel", float(painel["falta"].sum()), 19000.0)
+
+linha3 = painel[painel["id"] == 3].iloc[0]
+r.checar("contrato quitado não tem pendente", linha3["falta"], 0.0)
+
+# A régua tem de ser literalmente a mesma do cabeçalho de Pagamentos.
+r.checar(
+    "painel e Pagamentos batem",
+    fin.totais_contrato(LINHAS_FALSAS[1])["total"],
+    float(linha2["total"]),
+)
+
+fin.select_db = lambda *a, **k: pd.DataFrame()
+try:
+    r.checar("banco vazio não quebra o painel", len(fin.resumo_por_contrato()), 0)
+finally:
+    fin.select_db = _original
+
+
 sys.exit(r.encerrar())
