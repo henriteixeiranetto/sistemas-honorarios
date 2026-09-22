@@ -216,4 +216,61 @@ _iguais = pd.DataFrame([
 r.checar("idênticos em tudo ainda coexistem", len(fin._mapa_contratos(_iguais)), 2)
 
 
+r.secao("[14] Resumo financeiro do contrato inteiro")
+# Regressão relatada pelo escritório: num contrato que vive da redução da
+# liminar (sem honorários iniciais), o cabeçalho de Pagamentos mostrava
+# "Valor Total R$ 0,00" e a barra ficava em 0%, mesmo com parcelas recebidas.
+# O cálculo olhava só para os honorários iniciais.
+
+
+def _resumo(**campos):
+    base = {
+        "inicial_total": 0, "inicial_recebido": 0,
+        "liminar_total": 0, "liminar_recebido": 0,
+        "exito_fixo": 0, "exito_recebido": 0,
+        "exito_pago": 0, "exito_percentual": 0,
+    }
+    base.update(campos)
+    original = fin.select_db
+    fin.select_db = lambda *a, **k: pd.DataFrame([base])
+    try:
+        return fin.resumo_financeiro(1)
+    finally:
+        fin.select_db = original
+
+
+# O caso exato do print: 3 parcelas de R$ 3.000, duas pagas, sem iniciais.
+so_liminar = _resumo(liminar_total=9000, liminar_recebido=6000)
+r.checar("total soma a liminar", so_liminar["total"], 9000.0)
+r.checar("recebido conta as parcelas pagas", so_liminar["recebido"], 6000.0)
+r.checar("falta o restante", so_liminar["falta"], 3000.0)
+r.verdadeiro("barra sai de zero", abs(so_liminar["proporcao"] - 2 / 3) < 0.001)
+
+so_inicial = _resumo(inicial_total=10000, inicial_recebido=5000)
+r.checar("contrato só de iniciais continua certo", so_inicial["proporcao"], 0.5)
+
+misto = _resumo(inicial_total=4000, inicial_recebido=4000, liminar_total=6000, liminar_recebido=1500)
+r.checar("soma iniciais e liminar", misto["total"], 10000.0)
+r.checar("soma os recebimentos dos dois", misto["recebido"], 5500.0)
+
+# Êxito fixo acordado entra no total mesmo antes de ser recebido.
+exito_pendente = _resumo(liminar_total=9000, liminar_recebido=9000, exito_fixo=5000)
+r.checar("êxito fixo pendente entra no total", exito_pendente["total"], 14000.0)
+r.checar("mas não como recebido", exito_pendente["recebido"], 9000.0)
+
+exito_quitado = _resumo(liminar_total=9000, liminar_recebido=9000,
+                        exito_fixo=5000, exito_recebido=5000, exito_pago=1)
+r.checar("contrato quitado fecha em 100%", exito_quitado["proporcao"], 1.0)
+
+# Êxito por percentual não tem valor conhecido antes do resultado da causa.
+# Se entrasse no total como incógnita, a barra nunca fecharia.
+percentual = _resumo(liminar_total=9000, liminar_recebido=9000, exito_percentual=20)
+r.checar("êxito percentual fica fora do total", percentual["total"], 9000.0)
+r.checar("e permite fechar em 100%", percentual["proporcao"], 1.0)
+
+vazio = _resumo()
+r.checar("contrato sem valores não quebra", vazio["proporcao"], 0.0)
+r.checar("nem divide por zero", vazio["total"], 0.0)
+
+
 sys.exit(r.encerrar())

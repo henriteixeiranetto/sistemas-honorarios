@@ -161,6 +161,14 @@ ESTRUTURA = pd.DataFrame(
 def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
     q = " ".join(query.split()).lower()
 
+    if "inicial_total" in q:            # resumo financeiro do contrato
+        # Reproduz o caso relatado: so liminar, 2 de 3 parcelas pagas.
+        return pd.DataFrame([{
+            "inicial_total": 0.0, "inicial_recebido": 0.0,
+            "liminar_total": 9000.0, "liminar_recebido": 6000.0,
+            "exito_fixo": 0.0, "exito_recebido": 0.0,
+            "exito_pago": 0, "exito_percentual": 0.0,
+        }])
     if "information_schema" in q:
         return ESTRUTURA.copy()
     if "select c.id from contratos c" in q:

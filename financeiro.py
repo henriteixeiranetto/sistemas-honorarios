@@ -1437,6 +1437,30 @@ GROUP BY mes
 ORDER BY mes
 """
 
+SQL_RESUMO_CONTRATO = """
+-- Soma o contrato INTEIRO: honorários iniciais, parcelas da redução e êxito.
+-- O cabeçalho de Pagamentos olhava só para os iniciais, então um contrato que
+-- vive da liminar mostrava "Valor Total R$ 0,00" e a barra de progresso nunca
+-- saía de 0%, mesmo com parcelas recebidas.
+SELECT
+    COALESCE(c.valor_total, 0)::numeric                      AS inicial_total,
+    (COALESCE(c.valor_total, 0) - COALESCE(c.saldo_devedor, 0))::numeric
+                                                             AS inicial_recebido,
+    COALESCE((SELECT SUM(pl.valor_parcela)
+                FROM parcelas_liminar pl
+               WHERE pl.contrato_id = c.id), 0)::numeric      AS liminar_total,
+    COALESCE((SELECT SUM(pl.valor_parcela)
+                FROM parcelas_liminar pl
+               WHERE pl.contrato_id = c.id AND pl.pago = 1), 0)::numeric
+                                                             AS liminar_recebido,
+    COALESCE(c.hon_exito_fixo, 0)::numeric                    AS exito_fixo,
+    COALESCE(c.exito_valor_recebido, 0)::numeric              AS exito_recebido,
+    COALESCE(c.exito_pago, 0)                                 AS exito_pago,
+    COALESCE(c.hon_exito_percentual, 0)::numeric              AS exito_percentual
+FROM contratos c
+WHERE c.id = %s
+"""
+
 SQL_IDS_ATIVOS = """
 -- Contrato ativo = tem algo a receber, de qualquer natureza:
 --   1. saldo dos honorários iniciais em aberto;
@@ -1490,6 +1514,45 @@ INSERT INTO contratos
 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 RETURNING id
 """
+
+
+def resumo_financeiro(contrato_id: int) -> dict[str, float]:
+    """Totais do contrato inteiro: iniciais + redução da liminar + êxito.
+
+    O êxito por PERCENTUAL fica de fora do total enquanto não é recebido: o
+    valor depende do resultado da causa e ninguém sabe quanto é. Incluí-lo
+    como incógnita faria a barra nunca fechar em 100%. Depois de recebido,
+    entra pelo valor real.
+    """
+    df = select_db(SQL_RESUMO_CONTRATO, (contrato_id,))
+    if df.empty:
+        return {"total": 0.0, "recebido": 0.0, "falta": 0.0, "proporcao": 0.0}
+
+    linha = df.iloc[0]
+
+    def numero(campo: str) -> float:
+        valor = linha.get(campo, 0)
+        try:
+            return float(valor or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    total = numero("inicial_total") + numero("liminar_total")
+    recebido = numero("inicial_recebido") + numero("liminar_recebido")
+
+    if int(numero("exito_pago")) == 1:
+        total += numero("exito_recebido")
+        recebido += numero("exito_recebido")
+    else:
+        total += numero("exito_fixo")
+
+    recebido = max(0.0, min(recebido, total))
+    return {
+        "total": total,
+        "recebido": recebido,
+        "falta": max(total - recebido, 0.0),
+        "proporcao": (recebido / total) if total > 0 else 0.0,
+    }
 
 
 def _protegido(nome: str, bloco: Callable[[], None]) -> None:
@@ -1963,9 +2026,8 @@ def pagina_pagamentos() -> None:
     contrato_id = mapa[rotulo_sel]
     contrato = df_contratos[df_contratos["id"] == contrato_id].iloc[0]
 
-    valor_total = float(contrato["valor_total"])
     saldo = float(contrato["saldo_devedor"])
-    progresso = max(0.0, min(1.0, (valor_total - saldo) / valor_total)) if valor_total > 0 else 0.0
+    resumo = resumo_financeiro(contrato_id)
 
     # Dados do cliente e situação lado a lado: antes eram quatro blocos
     # empilhados que empurravam a ação para fora da tela.
@@ -1979,10 +2041,11 @@ def pagina_pagamentos() -> None:
             + (f"<br><span style='font-size:.88rem;color:#43545A;'>{processo}</span>" if processo else "")
         )
     with col_valores:
-        m1, m2 = st.columns(2)
-        m1.metric("Valor Total", moeda(valor_total))
-        m2.metric("Saldo Restante", moeda(saldo))
-        st.progress(progresso, text=f"Pago: {porcentagem(progresso)}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total do Contrato", moeda(resumo["total"]))
+        m2.metric("Já Recebido", moeda(resumo["recebido"]))
+        m3.metric("A Receber", moeda(resumo["falta"]))
+        st.progress(resumo["proporcao"], text=f"Pago: {porcentagem(resumo['proporcao'])}")
 
     if not nulo(contrato["observacoes"]):
         caixa(f"<b>Notas:</b> {contrato['observacoes']}", "caixa-nota")
