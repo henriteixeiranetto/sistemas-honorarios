@@ -560,7 +560,8 @@ CREATE TABLE IF NOT EXISTS contratos (
     nr_processo             TEXT,
     nr_vara                 TEXT,
     nome_juiz               TEXT,
-    comarca                 TEXT
+    comarca                 TEXT,
+    arquivado_em            TEXT
 )
 """
 
@@ -613,6 +614,12 @@ COLUNAS_EXTRAS: list[tuple[str, str]] = [
     # Substitui o antigo hábito de gravar "Pago" em `observacoes`, que apagava
     # as anotações do contrato quando o saldo zerava.
     ("quitado_em", "TEXT"),
+    # Arquivamento é uma decisão do escritório, não um cálculo. Antes, estar
+    # "arquivado" era só `saldo_devedor <= 0` — e como a maioria dos contratos
+    # daqui não tem honorário inicial, eles nasciam com saldo zero e apareciam
+    # como quitados no primeiro dia, ainda devendo a redução inteira. Com a
+    # data gravada, arquivado é o que alguém arquivou.
+    ("arquivado_em", "TEXT"),
 ]
 
 INDICES = [
@@ -1366,13 +1373,18 @@ def autenticar() -> bool:
 # 11. PÁGINAS
 # =============================================================================
 SQL_CONTRATOS_COM_PENDENCIA = """
+-- Os parênteses em volta dos OR não são estilo: sem eles o AND do
+-- arquivamento se prenderia só à última condição e os contratos arquivados
+-- voltariam a aparecer pela primeira.
 SELECT *
 FROM contratos c
-WHERE c.saldo_devedor > 0
-   OR EXISTS (SELECT 1 FROM parcelas_liminar pl
-               WHERE pl.contrato_id = c.id AND pl.pago = 0)
-   OR (COALESCE(c.exito_pago, 0) = 0
-       AND (COALESCE(c.hon_exito_percentual, 0) > 0 OR COALESCE(c.hon_exito_fixo, 0) > 0))
+WHERE c.arquivado_em IS NULL
+  AND (c.saldo_devedor > 0
+       OR EXISTS (SELECT 1 FROM parcelas_liminar pl
+                   WHERE pl.contrato_id = c.id AND pl.pago = 0)
+       OR (COALESCE(c.exito_pago, 0) = 0
+           AND (COALESCE(c.hon_exito_percentual, 0) > 0
+                OR COALESCE(c.hon_exito_fixo, 0) > 0)))
 ORDER BY c.cliente ASC
 """
 
@@ -1386,7 +1398,7 @@ SELECT c.cliente, c.telefone, c.saldo_devedor::numeric AS saldo_devedor,
        p.data_vencimento::text AS vencimento
 FROM parcelas p
 JOIN contratos c ON c.id = p.contrato_id
-WHERE p.pago = 0 AND p.data_vencimento < %s
+WHERE p.pago = 0 AND p.data_vencimento < %s AND c.arquivado_em IS NULL
 UNION ALL
 SELECT c.cliente, c.telefone, c.saldo_devedor::numeric,
        'Liminar / Redução', pl.nr_parcela,
@@ -1394,7 +1406,7 @@ SELECT c.cliente, c.telefone, c.saldo_devedor::numeric,
        pl.data_prevista::text
 FROM parcelas_liminar pl
 JOIN contratos c ON c.id = pl.contrato_id
-WHERE pl.pago = 0 AND pl.data_prevista < %s
+WHERE pl.pago = 0 AND pl.data_prevista < %s AND c.arquivado_em IS NULL
 """
 
 SQL_PROXIMAS = """
@@ -1404,6 +1416,7 @@ SELECT c.cliente, c.telefone, 'Honorários Iniciais' AS tipo,
 FROM parcelas p
 JOIN contratos c ON c.id = p.contrato_id
 WHERE p.pago = 0 AND p.data_vencimento >= %s AND p.data_vencimento <= %s
+  AND c.arquivado_em IS NULL
 UNION ALL
 SELECT c.cliente, c.telefone, 'Liminar / Redução',
        pl.nr_parcela, pl.valor_parcela::numeric,
@@ -1411,6 +1424,7 @@ SELECT c.cliente, c.telefone, 'Liminar / Redução',
 FROM parcelas_liminar pl
 JOIN contratos c ON c.id = pl.contrato_id
 WHERE pl.pago = 0 AND pl.data_prevista >= %s AND pl.data_prevista <= %s
+  AND c.arquivado_em IS NULL
 ORDER BY vencimento ASC
 """
 
@@ -1461,6 +1475,28 @@ FROM contratos c
 WHERE c.id = %s
 """
 
+SQL_PENDENCIAS_CONTRATO = """
+-- O que ainda falta receber neste contrato, item por item. É a mesma régua do
+-- SQL_IDS_ATIVOS, só que detalhada: lá interessa se há pendência, aqui
+-- interessa QUAL é, para poder dizer ao usuário por que o contrato ainda não
+-- pode ser arquivado.
+SELECT
+    COALESCE(c.saldo_devedor, 0)::numeric AS saldo_inicial,
+    (SELECT COUNT(*) FROM parcelas_liminar pl
+      WHERE pl.contrato_id = c.id AND pl.pago = 0) AS liminar_abertas,
+    CASE WHEN COALESCE(c.hon_liminar_reducao_vlr, 0) > 0
+              AND NOT EXISTS (SELECT 1 FROM parcelas_liminar pl
+                               WHERE pl.contrato_id = c.id)
+         THEN 1 ELSE 0 END AS reducao_sem_parcelas,
+    CASE WHEN COALESCE(c.exito_pago, 0) = 0
+              AND (COALESCE(c.hon_exito_percentual, 0) > 0
+                   OR COALESCE(c.hon_exito_fixo, 0) > 0)
+         THEN 1 ELSE 0 END AS exito_em_aberto,
+    c.arquivado_em::text AS arquivado_em
+FROM contratos c
+WHERE c.id = %s
+"""
+
 SQL_IDS_ATIVOS = """
 -- Contrato ativo = tem algo a receber, de qualquer natureza:
 --   1. saldo dos honorários iniciais em aberto;
@@ -1468,17 +1504,20 @@ SQL_IDS_ATIVOS = """
 --   3. redução ACORDADA mas ainda sem parcelas criadas — o dinheiro está
 --      combinado, só não foi agendado ainda (era o caso que faltava);
 --   4. êxito acordado e ainda não recebido.
+--   Contrato arquivado sai da conta, por mais que ainda tenha pendência:
+--   arquivar é dizer "não acompanhe mais este aqui".
 SELECT c.id
 FROM contratos c
-WHERE COALESCE(c.saldo_devedor, 0) > 0
-   OR EXISTS (SELECT 1 FROM parcelas_liminar pl
-               WHERE pl.contrato_id = c.id AND pl.pago = 0)
-   OR (COALESCE(c.hon_liminar_reducao_vlr, 0) > 0
-       AND NOT EXISTS (SELECT 1 FROM parcelas_liminar pl
-                        WHERE pl.contrato_id = c.id))
-   OR (COALESCE(c.exito_pago, 0) = 0
-       AND (COALESCE(c.hon_exito_percentual, 0) > 0
-            OR COALESCE(c.hon_exito_fixo, 0) > 0))
+WHERE c.arquivado_em IS NULL
+  AND (COALESCE(c.saldo_devedor, 0) > 0
+       OR EXISTS (SELECT 1 FROM parcelas_liminar pl
+                   WHERE pl.contrato_id = c.id AND pl.pago = 0)
+       OR (COALESCE(c.hon_liminar_reducao_vlr, 0) > 0
+           AND NOT EXISTS (SELECT 1 FROM parcelas_liminar pl
+                            WHERE pl.contrato_id = c.id))
+       OR (COALESCE(c.exito_pago, 0) = 0
+           AND (COALESCE(c.hon_exito_percentual, 0) > 0
+                OR COALESCE(c.hon_exito_fixo, 0) > 0)))
 """
 
 SQL_REDUCAO_SEM_PARCELAS = """
@@ -1490,6 +1529,7 @@ SELECT c.cliente, c.tutela,
 FROM contratos c
 WHERE COALESCE(c.hon_liminar_reducao_vlr, 0) > 0
   AND c.tutela IN ('Deferido', 'Parcial')
+  AND c.arquivado_em IS NULL
   AND NOT EXISTS (SELECT 1 FROM parcelas_liminar pl WHERE pl.contrato_id = c.id)
 ORDER BY c.cliente
 """
@@ -1553,6 +1593,37 @@ def resumo_financeiro(contrato_id: int) -> dict[str, float]:
         "falta": max(total - recebido, 0.0),
         "proporcao": (recebido / total) if total > 0 else 0.0,
     }
+
+
+def pendencias_contrato(linha: Any) -> list[str]:
+    """O que impede o arquivamento, em português. Lista vazia = nada a receber.
+
+    Função pura de propósito: a decisão de arquivar não pode depender de
+    banco para ser conferida.
+    """
+    def numero(campo: str) -> float:
+        try:
+            return float(linha.get(campo, 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    faltas: list[str] = []
+    saldo = numero("saldo_inicial")
+    if saldo > 0:
+        faltas.append(f"saldo de honorários iniciais em aberto ({moeda(saldo)})")
+
+    abertas = int(numero("liminar_abertas"))
+    if abertas:
+        plural = "s" if abertas > 1 else ""
+        faltas.append(f"{abertas} parcela{plural} da redução ainda não recebida{plural}")
+
+    if int(numero("reducao_sem_parcelas")):
+        faltas.append("redução acordada sem cronograma de parcelas")
+
+    if int(numero("exito_em_aberto")):
+        faltas.append("honorários de êxito ainda não recebidos")
+
+    return faltas
 
 
 def _protegido(nome: str, bloco: Callable[[], None]) -> None:
@@ -1997,7 +2068,9 @@ def pagina_pagamentos() -> None:
     col_sel, col_todos = st.columns([3, 1])
     with col_todos:
         st.write("")
-        mostrar_todos = st.checkbox("Mostrar todos", value=False, help="Inclui contratos já quitados")
+        mostrar_todos = st.checkbox(
+            "Mostrar todos", value=False, help="Inclui contratos já quitados e arquivados"
+        )
     consulta = (
         "SELECT * FROM contratos ORDER BY cliente ASC" if mostrar_todos else SQL_CONTRATOS_COM_PENDENCIA
     )
@@ -2485,7 +2558,35 @@ def pagina_meus_contratos() -> None:
 
     numerico(df_todos, "valor_total", "saldo_devedor")
 
-    busca = st.text_input("🔎 Buscar por nome, CPF/CNPJ ou nº do processo", placeholder="Digite para filtrar…")
+    esta_arquivado = df_todos.get(
+        "arquivado_em", pd.Series(dtype=object)
+    ).reindex(df_todos.index).apply(lambda v: not nulo(v))
+    total_arquivados = int(esta_arquivado.sum())
+
+    col_busca, col_arquivados = st.columns([3, 1])
+    with col_busca:
+        busca = st.text_input(
+            "🔎 Buscar por nome, CPF/CNPJ ou nº do processo", placeholder="Digite para filtrar…"
+        )
+    with col_arquivados:
+        st.write("")
+        st.write("")
+        ver_arquivados = st.checkbox(
+            "Mostrar arquivados",
+            value=False,
+            key="meus_contratos_ver_arquivados",
+            help=f"{total_arquivados} contrato(s) arquivado(s) no momento",
+        )
+
+    if not ver_arquivados:
+        df_todos = df_todos[~esta_arquivado]
+        if df_todos.empty:
+            st.info(
+                "Todos os contratos estão arquivados. Marque **Mostrar arquivados** "
+                "para vê-los."
+            )
+            return
+
     if busca.strip():
         termo = busca.strip().lower()
         termo_digitos = so_digitos(busca)
@@ -2544,9 +2645,78 @@ def pagina_meus_contratos() -> None:
     )
     st.divider()
 
+    _bloco_arquivamento(contrato_id, contrato)
     _expander_editar(contrato_id, contrato, tutela)
     _expander_parcelas_iniciais(contrato_id, contrato)
     _expander_parcelas_liminar(contrato_id, contrato, tutela)
+
+
+def _bloco_arquivamento(contrato_id: int, contrato: Any) -> None:
+    """Tira o contrato da rotina sem apagar nada.
+
+    Separado da exclusão de propósito: excluir some com o histórico, arquivar
+    só para de cobrar. O escritório pediu o botão para o cliente que já quitou
+    tudo, mas quem decide é ele — havendo pendência, o sistema diz qual e pede
+    uma confirmação a mais, em vez de travar. Contrato com êxito por
+    percentual, por exemplo, fica "em aberto" para sempre quando a causa é
+    perdida, e ninguém ficaria preso a isso.
+    """
+    arquivado_em = contrato.get("arquivado_em")
+
+    if not nulo(arquivado_em):
+        col_texto, col_botao = st.columns([3, 1])
+        col_texto.info(
+            f"📁 Arquivado em {formatar_data(arquivado_em)} — fora do painel, "
+            "dos avisos de vencimento e da lista de Pagamentos."
+        )
+        with col_botao:
+            st.write("")
+            if st.button(
+                "↩️ Desarquivar",
+                key=f"desarquivar_{contrato_id}",
+                use_container_width=True,
+            ):
+                exec_db("UPDATE contratos SET arquivado_em = NULL WHERE id = %s", (contrato_id,))
+                flash(f"{contrato['cliente']} voltou para os contratos ativos.")
+                st.rerun()
+        return
+
+    df = select_db(SQL_PENDENCIAS_CONTRATO, (contrato_id,))
+    faltas = pendencias_contrato(df.iloc[0]) if not df.empty else []
+
+    col_texto, col_botao = st.columns([3, 1])
+    with col_texto:
+        if faltas:
+            st.warning("Ainda há valores a receber: " + "; ".join(faltas) + ".")
+            liberado = st.checkbox(
+                "Arquivar mesmo assim",
+                key=f"arquivar_forcado_{contrato_id}",
+                help="Para quando o valor não virá mais — causa perdida, acordo desfeito.",
+            )
+        else:
+            st.success("✅ Nada mais a receber. O contrato já pode ser arquivado.")
+            liberado = True
+
+    with col_botao:
+        st.write("")
+        if st.button(
+            "📁 Arquivar Contrato",
+            key=f"arquivar_{contrato_id}",
+            disabled=not liberado,
+            type="primary",
+            use_container_width=True,
+        ):
+            exec_db(
+                "UPDATE contratos SET arquivado_em = %s WHERE id = %s",
+                (date.today().isoformat(), contrato_id),
+            )
+            flash(f"{contrato['cliente']} foi arquivado.")
+            st.rerun()
+
+    st.caption(
+        "Arquivar não apaga nada. O contrato sai do painel e da lista de Pagamentos, "
+        "passa a aparecer em 📁 Arquivados, e pode voltar a qualquer momento."
+    )
 
 
 def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
@@ -2933,23 +3103,32 @@ def _expander_parcelas_liminar(contrato_id: int, contrato: Any, tutela: str) -> 
 
 # ---------------------------------------------------------------- ARQUIVADOS --
 def pagina_arquivados() -> None:
-    st.header("Contratos Quitados")
-    st.markdown("Histórico de clientes que já **zeraram** seus saldos devedores.")
+    st.header("Contratos Arquivados")
+    st.markdown("Contratos encerrados pelo escritório. Nada aqui foi apagado.")
 
+    # Antes esta lista era `saldo_devedor <= 0`, o que dava errado justamente
+    # nos contratos deste escritório: a maioria não tem honorário inicial e
+    # nasce com saldo zero, então aparecia aqui como quitada no primeiro dia,
+    # ainda devendo a redução inteira. Agora arquivado é o que foi arquivado.
     df = select_db(
         """
         SELECT c.cliente, c.cpf_cnpj, c.telefone, c.valor_total, c.data_contrato,
+               c.arquivado_em::text AS data_arquivamento,
                COALESCE(c.quitado_em::text, MAX(p.data_pagamento)::text) AS data_quitacao,
                c.observacoes
         FROM contratos c
         LEFT JOIN parcelas p ON c.id = p.contrato_id
-        WHERE c.saldo_devedor <= 0
+        WHERE c.arquivado_em IS NOT NULL
         GROUP BY c.id
-        ORDER BY c.cliente ASC
+        ORDER BY c.arquivado_em DESC, c.cliente ASC
         """
     )
     if df.empty:
-        st.info("Nenhum contrato arquivado até o momento.")
+        st.info(
+            "Nenhum contrato arquivado até o momento.\n\n"
+            "Para arquivar: **📂 Meus Contratos** → selecione o contrato → "
+            "**📁 Arquivar Contrato**."
+        )
         return
 
     numerico(df, "valor_total")
@@ -2961,12 +3140,17 @@ def pagina_arquivados() -> None:
             "Valor Total": df["valor_total"],
             "Data Início": df["data_contrato"].apply(formatar_data),
             "Data Quitação": df["data_quitacao"].apply(formatar_data),
+            "Arquivado em": df["data_arquivamento"].apply(formatar_data),
             "Observações": df["observacoes"].apply(lambda v: "-" if nulo(v) else str(v)),
         }
     )
     tabela(visao, ["Valor Total"])
+    st.caption(
+        "Para reabrir um contrato: **📂 Meus Contratos** → marque "
+        "**Mostrar arquivados** → **↩️ Desarquivar**."
+    )
     st.divider()
-    botoes_exportacao(visao, "contratos_quitados", "Relatório de Contratos Quitados")
+    botoes_exportacao(visao, "contratos_arquivados", "Relatório de Contratos Arquivados")
 
 
 # -------------------------------------------------------------------- GESTÃO --

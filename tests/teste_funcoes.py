@@ -273,4 +273,45 @@ r.checar("contrato sem valores não quebra", vazio["proporcao"], 0.0)
 r.checar("nem divide por zero", vazio["total"], 0.0)
 
 
+r.secao("[15] Pendências — quando um contrato pode ser arquivado")
+# O escritório pediu um botão para arquivar quem já quitou tudo. A régua tem
+# de ser a mesma do painel, senão o contrato some de um lugar e fica no outro.
+
+
+def _pend(**campos):
+    base = {
+        "saldo_inicial": 0, "liminar_abertas": 0,
+        "reducao_sem_parcelas": 0, "exito_em_aberto": 0,
+    }
+    base.update(campos)
+    return fin.pendencias_contrato(base)
+
+
+r.checar("contrato quitado não tem pendência", _pend(), [])
+
+saldo = _pend(saldo_inicial=3500)
+r.checar("saldo inicial vira uma pendência", len(saldo), 1)
+r.verdadeiro("e diz quanto falta", "R$ 3.500,00" in saldo[0])
+
+r.verdadeiro("parcela da redução em aberto", "1 parcela" in _pend(liminar_abertas=1)[0])
+r.verdadeiro("singular sem 's'", "não recebida" in _pend(liminar_abertas=1)[0])
+r.verdadeiro("plural com 's'", "3 parcelas" in _pend(liminar_abertas=3)[0])
+r.verdadeiro("redução sem cronograma", "cronograma" in _pend(reducao_sem_parcelas=1)[0])
+r.verdadeiro("êxito em aberto", "êxito" in _pend(exito_em_aberto=1)[0])
+
+r.checar(
+    "várias pendências aparecem juntas",
+    len(_pend(saldo_inicial=100, liminar_abertas=2, exito_em_aberto=1)),
+    3,
+)
+
+# Valor nulo vindo do banco não pode virar exceção na hora de abrir a tela.
+r.checar("campo nulo não quebra", fin.pendencias_contrato({"saldo_inicial": None}), [])
+r.checar("campo ausente não quebra", fin.pendencias_contrato({}), [])
+r.checar("texto inválido não quebra", fin.pendencias_contrato({"saldo_inicial": "abc"}), [])
+
+# Regressão: saldo negativo acontece quando se recebe a mais. Não é pendência.
+r.checar("saldo negativo não é pendência", _pend(saldo_inicial=-50), [])
+
+
 sys.exit(r.encerrar())

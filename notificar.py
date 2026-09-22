@@ -148,6 +148,7 @@ SELECT 'Honorários Iniciais' AS tipo, c.id AS contrato_id, c.cliente,
 FROM parcelas p
 JOIN contratos c ON c.id = p.contrato_id
 WHERE p.pago = 0 AND p.data_vencimento::text {comparacao}
+  AND c.arquivado_em IS NULL
 UNION ALL
 SELECT 'Redução da Liminar', c.id, c.cliente,
        c.telefone, pl.nr_parcela,
@@ -156,6 +157,7 @@ SELECT 'Redução da Liminar', c.id, c.cliente,
 FROM parcelas_liminar pl
 JOIN contratos c ON c.id = pl.contrato_id
 WHERE pl.pago = 0 AND pl.data_prevista::text {comparacao}
+  AND c.arquivado_em IS NULL
 ORDER BY vencimento, cliente, nr_parcela
 """
 

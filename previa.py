@@ -62,7 +62,7 @@ CONTRATOS = pd.DataFrame([
      "nr_processo": "0801234-55.2026.8.17.0001", "nr_vara": "3ª Vara Cível",
      "nome_juiz": "Dra. Helena Vasconcelos", "comarca": "Recife/PE",
      "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
-     "quitado_em": ""},
+     "quitado_em": "", "arquivado_em": None},
     {"id": 11, "cliente": "Marcelo Soares de Albuquerque", "cpf_cnpj": "897.208.790-41",
      "telefone": "", "valor_total": 1234567.89, "saldo_devedor": 1226567.89,
      "data_contrato": _d(-95), "observacoes": "", "tutela": "Pendente",
@@ -74,7 +74,7 @@ CONTRATOS = pd.DataFrame([
      "nr_processo": "0809876-12.2026.8.17.0001", "nr_vara": "1ª Vara da Fazenda",
      "nome_juiz": "", "comarca": "Recife/PE",
      "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
-     "quitado_em": ""},
+     "quitado_em": "", "arquivado_em": None},
     {"id": 14, "cliente": "Construtora Ação Ltda", "cpf_cnpj": "11.222.333/0001-81",
      "telefone": "(81) 3333-4444", "valor_total": 6500.0, "saldo_devedor": 0.0,
      "data_contrato": _d(-320), "observacoes": "Indicação do Dr. Guilherme",
@@ -85,7 +85,7 @@ CONTRATOS = pd.DataFrame([
      "hon_exito_percentual": 0.0, "hon_exito_fixo": 0.0,
      "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
      "exito_pago": 1, "exito_data_pagamento": _d(-30), "exito_valor_recebido": 12000.0,
-     "quitado_em": _d(-30)},
+     "quitado_em": _d(-30), "arquivado_em": None},
 ])
 
 CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
@@ -99,7 +99,25 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "hon_exito_percentual": 0.0, "hon_exito_fixo": 0.0,
     "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
     "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
-    "quitado_em": "",
+    "quitado_em": "", "arquivado_em": None,
+}])], ignore_index=True)
+
+# Contrato já arquivado, para exercitar a lista de Arquivados e o botão de
+# desarquivar. Sem um destes, a tela de Arquivados nasce vazia na prévia e
+# ninguém repara que ela quebrou.
+CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
+    "id": 26, "cliente": "Perfumaria Aurora Ltda", "cpf_cnpj": "05.433.221/0001-09",
+    "telefone": "(81) 3232-7788", "valor_total": 0.0, "saldo_devedor": 0.0,
+    "data_contrato": _d(-400), "observacoes": "Encerrado — tudo recebido",
+    "tutela": "Deferido",
+    "hon_inicial_ativo": "Não", "hon_inicial_valor": 0.0,
+    "hon_inicial_parcelado": "Não", "hon_inicial_parcelas": 1,
+    "hon_inicial_vlr_parcela": 0.0, "hon_liminar_fixo": 0.0,
+    "hon_liminar_reducao_vlr": 0.0, "hon_liminar_reducao_prc": 0,
+    "hon_exito_percentual": 0.0, "hon_exito_fixo": 0.0,
+    "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
+    "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
+    "quitado_em": _d(-60), "arquivado_em": _d(-58),
 }])], ignore_index=True)
 
 PARCELAS = pd.DataFrame([
@@ -145,6 +163,7 @@ ESTRUTURA = pd.DataFrame(
             ("contratos", "exito_data_pagamento", "text", "YES"),
             ("contratos", "exito_valor_recebido", "numeric", "YES"),
             ("contratos", "quitado_em", "text", "YES"),
+            ("contratos", "arquivado_em", "text", "YES"),
             ("parcelas", "valor_parcela", "numeric", "NO"),
             ("parcelas", "data_vencimento", "date", "NO"),
             ("parcelas", "data_pagamento", "timestamp without time zone", "YES"),
@@ -169,14 +188,36 @@ def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
             "exito_fixo": 0.0, "exito_recebido": 0.0,
             "exito_pago": 0, "exito_percentual": 0.0,
         }])
+    if "saldo_inicial" in q:            # pendências do contrato (arquivamento)
+        alvo = CONTRATOS[CONTRATOS["id"] == (params[0] if params else 0)]
+        if alvo.empty:
+            return pd.DataFrame()
+        linha = alvo.iloc[0]
+        abertas = PARCELAS_LIMINAR[
+            (PARCELAS_LIMINAR["contrato_id"] == linha["id"]) & (PARCELAS_LIMINAR["pago"] == 0)
+        ]
+        tem_parcelas = (PARCELAS_LIMINAR["contrato_id"] == linha["id"]).any()
+        return pd.DataFrame([{
+            "saldo_inicial": float(linha["saldo_devedor"]),
+            "liminar_abertas": int(len(abertas)),
+            "reducao_sem_parcelas": int(linha["hon_liminar_reducao_vlr"] > 0 and not tem_parcelas),
+            "exito_em_aberto": int(
+                linha["exito_pago"] == 0
+                and (linha["hon_exito_percentual"] > 0 or linha["hon_exito_fixo"] > 0)
+            ),
+            "arquivado_em": linha["arquivado_em"],
+        }])
     if "information_schema" in q:
         return ESTRUTURA.copy()
     if "select c.id from contratos c" in q:
         ativos = CONTRATOS[
-            (CONTRATOS["saldo_devedor"] > 0)
-            | (CONTRATOS["hon_liminar_reducao_vlr"] > 0)
-            | (CONTRATOS["hon_exito_fixo"] > 0)
-            | (CONTRATOS["hon_exito_percentual"] > 0)
+            CONTRATOS["arquivado_em"].isna()
+            & (
+                (CONTRATOS["saldo_devedor"] > 0)
+                | (CONTRATOS["hon_liminar_reducao_vlr"] > 0)
+                | (CONTRATOS["hon_exito_fixo"] > 0)
+                | (CONTRATOS["hon_exito_percentual"] > 0)
+            )
         ]
         return ativos[["id"]].copy()
     if "select c.cliente, c.tutela" in q:
@@ -222,11 +263,14 @@ def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
     principal = achado.group(1) if achado else ""
 
     if "data_quitacao" in q:
-        df = CONTRATOS[CONTRATOS["saldo_devedor"] <= 0].copy()
+        df = CONTRATOS[CONTRATOS["arquivado_em"].notna()].copy()
         df["data_quitacao"] = df["quitado_em"]
+        df["data_arquivamento"] = df["arquivado_em"]
         return df
     if principal == "contratos":
         df = CONTRATOS.copy()
+        if "arquivado_em is null" in q:
+            df = df[df["arquivado_em"].isna()]
         if "saldo_devedor > 0" in q and "exists" not in q:
             df = df[df["saldo_devedor"] > 0]
         return df

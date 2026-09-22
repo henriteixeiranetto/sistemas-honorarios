@@ -13,9 +13,28 @@ Controle de contratos, parcelas e recebimentos de honorários advocatícios.
 | 📊 Dashboard | Totais, inadimplência, próximos vencimentos e recebimentos por mês |
 | ➕ Novo Contrato | Cadastro com honorários iniciais, liminar, êxito e dados do processo |
 | 💰 Pagamentos | Baixa de parcelas e emissão de recibo (WhatsApp ou PDF) |
-| 📂 Meus Contratos | Edição, parcelas da redução da liminar e estorno de baixas |
-| 📁 Arquivados | Histórico dos contratos quitados |
+| 📂 Meus Contratos | Edição, parcelas da redução da liminar, estorno de baixas e arquivamento |
+| 📁 Arquivados | Contratos encerrados pelo escritório |
 | ⚙️ Gestão | Exclusão, backup em Excel e diagnóstico da conexão |
+
+---
+
+## Arquivamento
+
+Arquivar é uma decisão do escritório, não um cálculo: fica gravado em
+`contratos.arquivado_em`. O contrato sai do painel, dos avisos de vencimento e
+da lista de Pagamentos, e passa a aparecer em **📁 Arquivados**. Nada é
+apagado, e dá para desarquivar quando quiser.
+
+O botão fica em **📂 Meus Contratos**, abaixo dos indicadores do contrato. Se
+ainda houver algo a receber, o sistema diz o que é e pede uma confirmação
+extra em vez de bloquear — contrato com êxito por percentual fica "em aberto"
+para sempre quando a causa é perdida, e ninguém deve ficar preso a isso.
+
+> Antes, "arquivado" era calculado como `saldo_devedor <= 0`. Como a maioria
+> dos contratos deste escritório não tem honorário inicial, eles nasciam com
+> saldo zero e apareciam como quitados no primeiro dia, ainda devendo a
+> redução inteira.
 
 ---
 
