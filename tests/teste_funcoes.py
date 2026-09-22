@@ -423,4 +423,66 @@ r.checar(
 )
 
 
+r.secao("[18] Êxito parcelado e sucumbência")
+# Pedido do escritório: dava para parcelar a redução da liminar, mas o êxito
+# só aceitava recebimento de uma vez. A sucumbência é o oposto — quem paga é a
+# parte contrária, então não há o que cobrar, só o que registrar.
+
+BASE = {
+    "inicial_total": 0, "inicial_recebido": 0,
+    "liminar_total": 0, "liminar_recebido": 0,
+    "exito_fixo": 0, "exito_recebido": 0, "exito_pago": 0, "exito_percentual": 0,
+    "exito_parcelas": 0, "exito_parc_total": 0, "exito_parc_recebido": 0,
+    "sucumbencia_valor": 0,
+}
+
+
+def _tot(**campos):
+    return fin.totais_contrato({**BASE, **campos})
+
+
+parcelado = _tot(exito_parcelas=3, exito_parc_total=30000, exito_parc_recebido=10000)
+r.checar("êxito parcelado entra no total", parcelado["total"], 30000.0)
+r.checar("e o recebido vem das parcelas", parcelado["recebido"], 10000.0)
+r.verdadeiro("barra anda com o cronograma", abs(parcelado["proporcao"] - 1 / 3) < 0.001)
+
+# Regressão: o cronograma manda. Um contrato parcelado DEPOIS de uma baixa
+# avulsa contaria o êxito duas vezes se as duas formas somassem.
+dobrado = _tot(
+    exito_parcelas=2, exito_parc_total=20000, exito_parc_recebido=20000,
+    exito_pago=1, exito_recebido=20000,
+)
+r.checar("não conta o êxito duas vezes", dobrado["total"], 20000.0)
+r.checar("nem o recebimento", dobrado["recebido"], 20000.0)
+
+# Sem cronograma, o comportamento antigo continua valendo.
+r.checar("êxito fixo sem cronograma", _tot(exito_fixo=45000)["total"], 45000.0)
+r.checar(
+    "êxito recebido de uma vez",
+    _tot(exito_pago=1, exito_recebido=12000)["recebido"],
+    12000.0,
+)
+
+# Sucumbência: dinheiro que entrou, nunca uma pendência.
+suc = _tot(liminar_total=9000, liminar_recebido=9000, sucumbencia_valor=2500)
+r.checar("sucumbência entra no total", suc["total"], 11500.0)
+r.checar("e no recebido junto", suc["recebido"], 11500.0)
+r.checar("sem virar pendência", suc["falta"], 0.0)
+
+# Regressão: a sucumbência entra por fora do teto. Se fosse limitada pelo
+# total esperado, num contrato com parcela em aberto ela sumiria da conta.
+misto = _tot(
+    liminar_total=9000, liminar_recebido=3000, sucumbencia_valor=2500,
+)
+r.checar("sucumbência aparece mesmo com parcela em aberto", misto["recebido"], 5500.0)
+r.checar("e o que falta continua certo", misto["falta"], 6000.0)
+
+# Pendências: a parcela do êxito precisa aparecer no motivo de não arquivar.
+duas = _pend(exito_abertas=2)
+r.verdadeiro("parcela do êxito vira pendência", "2 parcelas do êxito" in duas[0])
+r.verdadeiro("no plural certo", "recebidas" in duas[0])
+r.verdadeiro("singular sem 's'", "1 parcela do êxito" in _pend(exito_abertas=1)[0])
+r.checar("sem parcela aberta, sem pendência de êxito", _pend(exito_abertas=0), [])
+
+
 sys.exit(r.encerrar())

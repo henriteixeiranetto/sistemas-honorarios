@@ -158,6 +158,15 @@ FROM parcelas_liminar pl
 JOIN contratos c ON c.id = pl.contrato_id
 WHERE pl.pago = 0 AND pl.data_prevista::text {comparacao}
   AND c.arquivado_em IS NULL
+UNION ALL
+SELECT 'Honorários de Êxito', c.id, c.cliente,
+       c.telefone, pe.nr_parcela,
+       pe.valor_parcela::numeric,
+       pe.data_prevista::text
+FROM parcelas_exito pe
+JOIN contratos c ON c.id = pe.contrato_id
+WHERE pe.pago = 0 AND pe.data_prevista::text {comparacao}
+  AND c.arquivado_em IS NULL
 ORDER BY vencimento, cliente, nr_parcela
 """
 
@@ -166,7 +175,7 @@ def buscar_vencimentos(conexao, referencia: str, incluir_atrasadas: bool) -> lis
     comparacao = "<= %s" if incluir_atrasadas else "= %s"
     sql = SQL_VENCENDO.format(comparacao=comparacao)
     with conexao.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(sql, (referencia, referencia))
+        cur.execute(sql, (referencia, referencia, referencia))
         return [dict(linha) for linha in cur.fetchall()]
 
 

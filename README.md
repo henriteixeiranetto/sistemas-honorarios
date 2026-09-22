@@ -12,10 +12,36 @@ Controle de contratos, parcelas e recebimentos de honorários advocatícios.
 |---|---|
 | 📊 Dashboard | Totais, inadimplência, próximos vencimentos e recebimentos por mês |
 | ➕ Novo Contrato | Cadastro com honorários iniciais, liminar, êxito e dados do processo |
-| 💰 Pagamentos | Baixa de parcelas e emissão de recibo (WhatsApp ou PDF) |
-| 📂 Meus Contratos | Edição, parcelas da redução da liminar, estorno de baixas e arquivamento |
+| 💰 Pagamentos | Baixa de parcelas, sucumbência e emissão de recibo (WhatsApp ou PDF) |
+| 📂 Meus Contratos | Edição, cronogramas da redução e do êxito, estorno de baixas e arquivamento |
 | 📁 Arquivados | Contratos encerrados pelo escritório |
 | ⚙️ Gestão | Exclusão, backup em Excel e diagnóstico da conexão |
+
+---
+
+## As quatro origens do dinheiro
+
+Um contrato pode receber por quatro caminhos, e cada um entra na conta de um jeito:
+
+| Origem | Como se cobra | Onde |
+|---|---|---|
+| **Honorários iniciais** | parcelado no cadastro do contrato | `parcelas` |
+| **Redução da liminar** | cronograma criado depois, quando a tutela sai | `parcelas_liminar` |
+| **Êxito** | cronograma criado depois, ou recebimento de uma vez | `parcelas_exito` ou `contratos.exito_*` |
+| **Sucumbência** | não se cobra — quem paga é a parte contrária | `contratos.sucumbencia_*` |
+
+O **êxito** só tem valor conhecido quando a causa resolve, então o cronograma
+nasce em **📂 Meus Contratos → 🏆 Parcelas dos Honorários de Êxito**, não no
+cadastro — ali existe apenas o percentual combinado. Havendo cronograma, ele
+manda: o recebimento de uma vez fica de fora da conta, para o mesmo êxito não
+ser somado duas vezes.
+
+O **êxito por percentual** fica fora do total enquanto não é recebido nem
+parcelado. O valor depende do resultado da causa, e somá-lo como incógnita
+faria a barra de progresso nunca fechar em 100%.
+
+A **sucumbência** entra no total e no recebido ao mesmo tempo, nunca como
+pendência: só se sabe quanto é quando o dinheiro entra.
 
 ---
 

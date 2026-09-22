@@ -613,6 +613,21 @@ CREATE TABLE IF NOT EXISTS parcelas_liminar (
 )
 """
 
+DDL_PARCELAS_EXITO = """
+-- Mesma estrutura das parcelas da redução, de propósito: o êxito passou a ser
+-- parcelado a pedido do escritório, e repetir o formato deixa as duas telas
+-- iguais de usar.
+CREATE TABLE IF NOT EXISTS parcelas_exito (
+    id             SERIAL PRIMARY KEY,
+    contrato_id    INTEGER NOT NULL REFERENCES contratos(id) ON DELETE CASCADE,
+    nr_parcela     INTEGER NOT NULL,
+    valor_parcela  NUMERIC(14,2) NOT NULL,
+    data_prevista  TEXT NOT NULL,
+    data_pagamento TEXT,
+    pago           INTEGER DEFAULT 0
+)
+"""
+
 # Lista estática — nunca vem de entrada do usuário, por isso a interpolação
 # direta no ALTER TABLE é segura.
 COLUNAS_EXTRAS: list[tuple[str, str]] = [
@@ -643,6 +658,12 @@ COLUNAS_EXTRAS: list[tuple[str, str]] = [
     # como quitados no primeiro dia, ainda devendo a redução inteira. Com a
     # data gravada, arquivado é o que alguém arquivou.
     ("arquivado_em", "TEXT"),
+    # Sucumbência quem paga é a parte contrária, não o cliente — não há o que
+    # cobrar nem cronograma a montar. Só se registra o que entrou, como o
+    # êxito era registrado antes de virar parcelado.
+    ("sucumbencia_recebida", "INTEGER"),
+    ("sucumbencia_data", "TEXT"),
+    ("sucumbencia_valor_recebido", "NUMERIC(14,2)"),
 ]
 
 INDICES = [
@@ -651,6 +672,8 @@ INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_parcelas_vencimento ON parcelas (data_vencimento) WHERE pago = 0",
     "CREATE INDEX IF NOT EXISTS idx_plim_contrato ON parcelas_liminar (contrato_id)",
     "CREATE INDEX IF NOT EXISTS idx_plim_prevista ON parcelas_liminar (data_prevista) WHERE pago = 0",
+    "CREATE INDEX IF NOT EXISTS idx_pexi_contrato ON parcelas_exito (contrato_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pexi_prevista ON parcelas_exito (data_prevista) WHERE pago = 0",
     "CREATE INDEX IF NOT EXISTS idx_contratos_saldo ON contratos (saldo_devedor)",
     "CREATE INDEX IF NOT EXISTS idx_contratos_cliente ON contratos (cliente)",
 ]
@@ -660,6 +683,7 @@ INDICES = [
 INDICES_UNICOS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_parcelas_contrato_nr ON parcelas (contrato_id, nr_parcela)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_plim_contrato_nr ON parcelas_liminar (contrato_id, nr_parcela)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_pexi_contrato_nr ON parcelas_exito (contrato_id, nr_parcela)",
 ]
 
 
@@ -679,6 +703,7 @@ def inicializar_banco() -> dict[str, Any]:
         cur.execute(DDL_CONTRATOS)
         cur.execute(DDL_PARCELAS)
         cur.execute(DDL_PARCELAS_LIMINAR)
+        cur.execute(DDL_PARCELAS_EXITO)
         for coluna, tipo in COLUNAS_EXTRAS:
             cur.execute(f"ALTER TABLE contratos ADD COLUMN IF NOT EXISTS {coluna} {tipo}")
         for indice in INDICES:
@@ -692,7 +717,12 @@ def inicializar_banco() -> dict[str, Any]:
             with transacao() as cur:
                 cur.execute(indice)
         except Exception as erro:
-            alvo = "parcelas_liminar" if "plim" in indice else "parcelas"
+            alvo = next(
+                (nome for chave, nome in (("plim", "parcelas_liminar"),
+                                          ("pexi", "parcelas_exito"))
+                 if chave in indice),
+                "parcelas",
+            )
             avisos.append(
                 f"Não foi possível criar o índice único de `{alvo}` — "
                 f"provavelmente há parcelas duplicadas. Detalhe: {str(erro).strip()[:160]}"
@@ -1405,7 +1435,11 @@ WHERE c.arquivado_em IS NULL
   AND (c.saldo_devedor > 0
        OR EXISTS (SELECT 1 FROM parcelas_liminar pl
                    WHERE pl.contrato_id = c.id AND pl.pago = 0)
+       OR EXISTS (SELECT 1 FROM parcelas_exito pe
+                   WHERE pe.contrato_id = c.id AND pe.pago = 0)
        OR (COALESCE(c.exito_pago, 0) = 0
+           AND NOT EXISTS (SELECT 1 FROM parcelas_exito pe
+                            WHERE pe.contrato_id = c.id)
            AND (COALESCE(c.hon_exito_percentual, 0) > 0
                 OR COALESCE(c.hon_exito_fixo, 0) > 0)))
 ORDER BY c.cliente ASC
@@ -1430,6 +1464,14 @@ SELECT c.cliente, c.telefone, c.saldo_devedor::numeric,
 FROM parcelas_liminar pl
 JOIN contratos c ON c.id = pl.contrato_id
 WHERE pl.pago = 0 AND pl.data_prevista < %s AND c.arquivado_em IS NULL
+UNION ALL
+SELECT c.cliente, c.telefone, c.saldo_devedor::numeric,
+       'Honorários de Êxito', pe.nr_parcela,
+       pe.valor_parcela::numeric,
+       pe.data_prevista::text
+FROM parcelas_exito pe
+JOIN contratos c ON c.id = pe.contrato_id
+WHERE pe.pago = 0 AND pe.data_prevista < %s AND c.arquivado_em IS NULL
 """
 
 SQL_PROXIMAS = """
@@ -1448,6 +1490,14 @@ FROM parcelas_liminar pl
 JOIN contratos c ON c.id = pl.contrato_id
 WHERE pl.pago = 0 AND pl.data_prevista >= %s AND pl.data_prevista <= %s
   AND c.arquivado_em IS NULL
+UNION ALL
+SELECT c.cliente, c.telefone, 'Honorários de Êxito',
+       pe.nr_parcela, pe.valor_parcela::numeric,
+       pe.data_prevista::text
+FROM parcelas_exito pe
+JOIN contratos c ON c.id = pe.contrato_id
+WHERE pe.pago = 0 AND pe.data_prevista >= %s AND pe.data_prevista <= %s
+  AND c.arquivado_em IS NULL
 ORDER BY vencimento ASC
 """
 
@@ -1463,10 +1513,24 @@ SELECT mes, SUM(total) AS total FROM (
     WHERE pago = 1 AND data_pagamento IS NOT NULL AND data_pagamento::text <> ''
     GROUP BY 1
     UNION ALL
+    SELECT LEFT(data_pagamento::text, 7), SUM(valor_parcela::numeric)
+    FROM parcelas_exito
+    WHERE pago = 1 AND data_pagamento IS NOT NULL AND data_pagamento::text <> ''
+    GROUP BY 1
+    UNION ALL
+    -- Só o êxito recebido de uma vez: quando há cronograma, o valor já veio
+    -- das parcelas acima e contar de novo dobraria o mês.
     SELECT LEFT(exito_data_pagamento::text, 7), SUM(exito_valor_recebido::numeric)
-    FROM contratos
+    FROM contratos c
     WHERE COALESCE(exito_pago, 0) = 1
       AND exito_data_pagamento IS NOT NULL AND exito_data_pagamento::text <> ''
+      AND NOT EXISTS (SELECT 1 FROM parcelas_exito pe WHERE pe.contrato_id = c.id)
+    GROUP BY 1
+    UNION ALL
+    SELECT LEFT(sucumbencia_data::text, 7), SUM(sucumbencia_valor_recebido::numeric)
+    FROM contratos
+    WHERE COALESCE(sucumbencia_recebida, 0) = 1
+      AND sucumbencia_data IS NOT NULL AND sucumbencia_data::text <> ''
     GROUP BY 1
 ) t
 WHERE mes IS NOT NULL AND mes <> ''
@@ -1497,7 +1561,20 @@ SELECT
     COALESCE(c.hon_exito_fixo, 0)::numeric                    AS exito_fixo,
     COALESCE(c.exito_valor_recebido, 0)::numeric              AS exito_recebido,
     COALESCE(c.exito_pago, 0)                                 AS exito_pago,
-    COALESCE(c.hon_exito_percentual, 0)::numeric              AS exito_percentual
+    COALESCE(c.hon_exito_percentual, 0)::numeric              AS exito_percentual,
+    (SELECT COUNT(*) FROM parcelas_exito pe
+      WHERE pe.contrato_id = c.id)                            AS exito_parcelas,
+    COALESCE((SELECT SUM(pe.valor_parcela) FROM parcelas_exito pe
+               WHERE pe.contrato_id = c.id), 0)::numeric      AS exito_parc_total,
+    COALESCE((SELECT SUM(pe.valor_parcela) FROM parcelas_exito pe
+               WHERE pe.contrato_id = c.id AND pe.pago = 1), 0)::numeric
+                                                              AS exito_parc_recebido,
+    -- Sucumbência não tem valor esperado: quem paga é a parte contrária e só
+    -- se sabe quanto foi quando entra. Por isso entra no total e no recebido
+    -- ao mesmo tempo, nunca como pendência.
+    CASE WHEN COALESCE(c.sucumbencia_recebida, 0) = 1
+         THEN COALESCE(c.sucumbencia_valor_recebido, 0) ELSE 0 END::numeric
+                                                              AS sucumbencia_valor
 FROM contratos c
 WHERE c.id = %s
 """
@@ -1515,7 +1592,13 @@ SELECT
     COALESCE(pl.recebido, 0)::numeric                        AS liminar_recebido,
     COALESCE(c.hon_exito_fixo, 0)::numeric                   AS exito_fixo,
     COALESCE(c.exito_valor_recebido, 0)::numeric             AS exito_recebido,
-    COALESCE(c.exito_pago, 0)                                AS exito_pago
+    COALESCE(c.exito_pago, 0)                                AS exito_pago,
+    COALESCE(pe.quantidade, 0)                               AS exito_parcelas,
+    COALESCE(pe.total, 0)::numeric                           AS exito_parc_total,
+    COALESCE(pe.recebido, 0)::numeric                        AS exito_parc_recebido,
+    CASE WHEN COALESCE(c.sucumbencia_recebida, 0) = 1
+         THEN COALESCE(c.sucumbencia_valor_recebido, 0) ELSE 0 END::numeric
+                                                             AS sucumbencia_valor
 FROM contratos c
 LEFT JOIN (
     SELECT contrato_id,
@@ -1524,6 +1607,14 @@ LEFT JOIN (
     FROM parcelas_liminar
     GROUP BY contrato_id
 ) pl ON pl.contrato_id = c.id
+LEFT JOIN (
+    SELECT contrato_id,
+           COUNT(*) AS quantidade,
+           SUM(valor_parcela) AS total,
+           SUM(CASE WHEN pago = 1 THEN valor_parcela END) AS recebido
+    FROM parcelas_exito
+    GROUP BY contrato_id
+) pe ON pe.contrato_id = c.id
 """
 
 SQL_PENDENCIAS_CONTRATO = """
@@ -1539,7 +1630,13 @@ SELECT
               AND NOT EXISTS (SELECT 1 FROM parcelas_liminar pl
                                WHERE pl.contrato_id = c.id)
          THEN 1 ELSE 0 END AS reducao_sem_parcelas,
+    (SELECT COUNT(*) FROM parcelas_exito pe
+      WHERE pe.contrato_id = c.id AND pe.pago = 0) AS exito_abertas,
+    -- Com cronograma, a pendência do êxito são as parcelas em aberto acima;
+    -- contar o acordo também transformaria uma dívida em duas.
     CASE WHEN COALESCE(c.exito_pago, 0) = 0
+              AND NOT EXISTS (SELECT 1 FROM parcelas_exito pe
+                               WHERE pe.contrato_id = c.id)
               AND (COALESCE(c.hon_exito_percentual, 0) > 0
                    OR COALESCE(c.hon_exito_fixo, 0) > 0)
          THEN 1 ELSE 0 END AS exito_em_aberto,
@@ -1566,7 +1663,11 @@ WHERE c.arquivado_em IS NULL
        OR (COALESCE(c.hon_liminar_reducao_vlr, 0) > 0
            AND NOT EXISTS (SELECT 1 FROM parcelas_liminar pl
                             WHERE pl.contrato_id = c.id))
+       OR EXISTS (SELECT 1 FROM parcelas_exito pe
+                   WHERE pe.contrato_id = c.id AND pe.pago = 0)
        OR (COALESCE(c.exito_pago, 0) = 0
+           AND NOT EXISTS (SELECT 1 FROM parcelas_exito pe
+                            WHERE pe.contrato_id = c.id)
            AND (COALESCE(c.hon_exito_percentual, 0) > 0
                 OR COALESCE(c.hon_exito_fixo, 0) > 0)))
 """
@@ -1589,7 +1690,7 @@ SQL_ESTRUTURA = """
 SELECT table_name, column_name, data_type, is_nullable, column_default
 FROM information_schema.columns
 WHERE table_schema = 'public'
-  AND table_name IN ('contratos', 'parcelas', 'parcelas_liminar')
+  AND table_name IN ('contratos', 'parcelas', 'parcelas_liminar', 'parcelas_exito')
 ORDER BY table_name, ordinal_position
 """
 
@@ -1630,13 +1731,26 @@ def totais_contrato(linha: Any) -> dict[str, float]:
     total = _numero(linha, "inicial_total") + _numero(linha, "liminar_total")
     recebido = _numero(linha, "inicial_recebido") + _numero(linha, "liminar_recebido")
 
-    if int(_numero(linha, "exito_pago")) == 1:
+    # O êxito tem três formas, nesta ordem de prioridade: parcelado (o
+    # cronograma manda), recebido de uma vez, ou apenas acordado. Sem a
+    # prioridade, um contrato que foi parcelado depois de já ter uma baixa
+    # avulsa contaria o êxito duas vezes.
+    if int(_numero(linha, "exito_parcelas")) > 0:
+        total += _numero(linha, "exito_parc_total")
+        recebido += _numero(linha, "exito_parc_recebido")
+    elif int(_numero(linha, "exito_pago")) == 1:
         total += _numero(linha, "exito_recebido")
         recebido += _numero(linha, "exito_recebido")
     else:
         total += _numero(linha, "exito_fixo")
 
     recebido = max(0.0, min(recebido, total))
+
+    # A sucumbência entra por fora, depois do teto acima: é dinheiro que já
+    # entrou, e limitá-la pelo total esperado a faria sumir da conta.
+    sucumbencia = _numero(linha, "sucumbencia_valor")
+    total += sucumbencia
+    recebido += sucumbencia
     return {
         "total": total,
         "recebido": recebido,
@@ -1730,6 +1844,11 @@ def pendencias_contrato(linha: Any) -> list[str]:
 
     if int(numero("reducao_sem_parcelas")):
         faltas.append("redução acordada sem cronograma de parcelas")
+
+    exito_abertas = int(numero("exito_abertas"))
+    if exito_abertas:
+        plural = "s" if exito_abertas > 1 else ""
+        faltas.append(f"{exito_abertas} parcela{plural} do êxito ainda não recebida{plural}")
 
     if int(numero("exito_em_aberto")):
         faltas.append("honorários de êxito ainda não recebidos")
@@ -1897,7 +2016,7 @@ def _bloco_inadimplencia() -> None:
     referencia = hoje().isoformat()
     # O filtro de vencidos passou para o SQL: antes o sistema trazia TODAS as
     # parcelas em aberto do banco e descartava a maioria no pandas.
-    df = select_db(SQL_ATRASADAS, (referencia, referencia))
+    df = select_db(SQL_ATRASADAS, (referencia, referencia, referencia))
     if df.empty:
         return
 
@@ -1966,7 +2085,7 @@ def _bloco_reducao_pendente() -> None:
 def _bloco_proximos_vencimentos(dias: int = 15) -> None:
     inicio = hoje().isoformat()
     fim = (hoje() + timedelta(days=dias)).isoformat()
-    df = select_db(SQL_PROXIMAS, (inicio, fim, inicio, fim))
+    df = select_db(SQL_PROXIMAS, (inicio, fim, inicio, fim, inicio, fim))
     if df.empty:
         return
 
@@ -2260,8 +2379,9 @@ def pagina_pagamentos() -> None:
     if not nulo(contrato["observacoes"]):
         caixa(f"<b>Notas:</b> {contrato['observacoes']}", "caixa-nota")
 
-    aba_inicial, aba_liminar, aba_exito, aba_combinado = st.tabs(
-        ["💰 Honorários Iniciais", "⚖️ Liminar / Redução", "🏆 Êxito", "📋 Combinado"]
+    aba_inicial, aba_liminar, aba_exito, aba_sucumbencia, aba_combinado = st.tabs(
+        ["💰 Honorários Iniciais", "⚖️ Liminar / Redução", "🏆 Êxito",
+         "🏛️ Sucumbência", "📋 Combinado"]
     )
     with aba_inicial:
         _tab_honorarios_iniciais(contrato_id, contrato)
@@ -2269,6 +2389,8 @@ def pagina_pagamentos() -> None:
         _tab_liminar(contrato_id, contrato)
     with aba_exito:
         _tab_exito(contrato_id, contrato)
+    with aba_sucumbencia:
+        _tab_sucumbencia(contrato_id, contrato)
     with aba_combinado:
         _tab_combinado(contrato_id, contrato, saldo)
 
@@ -2467,7 +2589,28 @@ def _baixar_parcela_liminar(contrato_id: int, numero: int, data_recebimento: dat
             raise ErroBanco("Esta parcela já havia sido registrada. A tela foi atualizada.")
 
 
+def _baixar_parcela_exito(contrato_id: int, numero: int, data_recebimento: date) -> None:
+    with transacao() as cur:
+        cur.execute(
+            """UPDATE parcelas_exito
+                  SET pago = 1, data_pagamento = %s
+                WHERE contrato_id = %s AND nr_parcela = %s AND pago = 0""",
+            (data_recebimento.strftime("%Y-%m-%d"), contrato_id, numero),
+        )
+        if cur.rowcount == 0:
+            raise ErroBanco("Esta parcela já havia sido registrada. A tela foi atualizada.")
+
+
 def _tab_exito(contrato_id: int, contrato: Any) -> None:
+    # Havendo cronograma, ele manda: o êxito passou a poder ser parcelado, e o
+    # recebimento de uma vez continua existindo para quem não parcela.
+    parcelas = select_db(
+        "SELECT * FROM parcelas_exito WHERE contrato_id = %s ORDER BY nr_parcela", (contrato_id,)
+    )
+    if not parcelas.empty:
+        _tab_exito_parcelado(contrato_id, contrato, parcelas)
+        return
+
     ja_pago = int(contrato.get("exito_pago") or 0)
     percentual = float(contrato.get("hon_exito_percentual") or 0)
     fixo = float(contrato.get("hon_exito_fixo") or 0)
@@ -2498,6 +2641,10 @@ def _tab_exito(contrato_id: int, contrato: Any) -> None:
         st.info(f"Percentual de êxito acordado: **{numero_br(percentual)}%** sobre o valor da causa.")
     if fixo > 0:
         st.info(f"Valor fixo de êxito acordado: **{moeda_md(fixo)}**")
+    st.caption(
+        "Vai receber em parcelas? Monte o cronograma em "
+        "**📂 Meus Contratos → 🏆 Parcelas dos Honorários de Êxito**."
+    )
 
     col1, col2 = st.columns(2)
     valor_recebido = col1.number_input(
@@ -2529,6 +2676,118 @@ def _tab_exito(contrato_id: int, contrato: Any) -> None:
         contrato["telefone"],
     )
     flash("Honorários de êxito registrados!")
+    st.rerun()
+
+
+def _tab_exito_parcelado(contrato_id: int, contrato: Any, df: pd.DataFrame) -> None:
+    """Baixa das parcelas do êxito. Mesmo fluxo da redução da liminar."""
+    numerico(df, "pago", "valor_parcela")
+    df["pago"] = df["pago"].astype(int)
+    _tabela_parcelas(df, "data_prevista", "Previsão")
+
+    pendentes = df[df["pago"] == 0]
+    if pendentes.empty:
+        st.success("🎉 Todas as parcelas do êxito já foram recebidas!")
+        return
+
+    col1, col2 = st.columns(2)
+    opcoes = {
+        f"Parcela {linha.nr_parcela} — Prev. {formatar_data(linha.data_prevista)} — "
+        f"{moeda(linha.valor_parcela)}": int(linha.nr_parcela)
+        for linha in pendentes.itertuples()
+    }
+    rotulo = col1.selectbox("Qual parcela recebeu?", list(opcoes), key=f"exp_sel_{contrato_id}")
+    numero = opcoes[rotulo]
+    sugerido = float(pendentes[pendentes["nr_parcela"] == numero]["valor_parcela"].iloc[0])
+    valor_recebido = col2.number_input(
+        "Valor Recebido (R$)", value=sugerido, min_value=0.0, format="%.2f",
+        key=f"exp_vlr_{contrato_id}",
+    )
+    data_recebimento = st.date_input(
+        "Data do Recebimento", value=hoje(), key=f"exp_data_{contrato_id}",
+        format=FORMATO_DATA_WIDGET,
+    )
+
+    if not st.button("✅ Confirmar Recebimento", type="primary", key=f"exp_btn_{contrato_id}"):
+        return
+
+    _baixar_parcela_exito(contrato_id, numero, data_recebimento)
+    registrar_recibo(
+        montar_recibo(
+            titulo="RECIBO — HONORÁRIOS DE ÊXITO",
+            cliente=contrato["cliente"],
+            documento=contrato["cpf_cnpj"],
+            itens=[f"🏆 Honorários de Êxito — Parcela {numero}: {moeda(valor_recebido)}"],
+            total=valor_recebido,
+            data=data_recebimento,
+        ),
+        contrato["telefone"],
+    )
+    flash(f"Parcela {numero} do êxito registrada!")
+    st.rerun()
+
+
+def _tab_sucumbencia(contrato_id: int, contrato: Any) -> None:
+    """Sucumbência é só registro: quem paga é a parte contrária.
+
+    Não há cronograma nem cobrança a montar — o escritório recebe e anota,
+    exatamente como o êxito funcionava antes de poder ser parcelado.
+    """
+    recebida = int(_numero(contrato, "sucumbencia_recebida"))
+
+    if recebida == 1:
+        valor = _numero(contrato, "sucumbencia_valor_recebido")
+        quando = formatar_data(contrato.get("sucumbencia_data"))
+        st.success(f"⚖️ Sucumbência recebida em **{quando}**: **{moeda_md(valor)}**")
+        if st.button("↩️ Estornar recebimento de sucumbência", key=f"suc_estorno_{contrato_id}"):
+            exec_db(
+                """UPDATE contratos
+                      SET sucumbencia_recebida = 0, sucumbencia_data = NULL,
+                          sucumbencia_valor_recebido = NULL
+                    WHERE id = %s""",
+                (contrato_id,),
+            )
+            flash("Recebimento de sucumbência estornado.", "warning")
+            st.rerun()
+        return
+
+    st.info(
+        "Honorários de sucumbência são pagos pela **parte contrária**, por "
+        "determinação judicial — não há o que cobrar do cliente. Registre aqui "
+        "quando o valor entrar."
+    )
+    col1, col2 = st.columns(2)
+    valor_recebido = col1.number_input(
+        "Valor Recebido (R$)", min_value=0.01, step=100.0, format="%.2f",
+        value=100.0, key=f"suc_vlr_{contrato_id}",
+    )
+    data_recebimento = col2.date_input(
+        "Data do Recebimento", value=hoje(), key=f"suc_data_{contrato_id}",
+        format=FORMATO_DATA_WIDGET,
+    )
+
+    if not st.button("⚖️ Confirmar Recebimento de Sucumbência", type="primary", key=f"suc_btn_{contrato_id}"):
+        return
+
+    exec_db(
+        """UPDATE contratos
+              SET sucumbencia_recebida = 1, sucumbencia_data = %s,
+                  sucumbencia_valor_recebido = %s
+            WHERE id = %s""",
+        (data_recebimento.strftime("%Y-%m-%d"), valor_recebido, contrato_id),
+    )
+    registrar_recibo(
+        montar_recibo(
+            titulo="RECIBO — HONORÁRIOS DE SUCUMBÊNCIA",
+            cliente=contrato["cliente"],
+            documento=contrato["cpf_cnpj"],
+            itens=[f"⚖️ Honorários de Sucumbência: {moeda(valor_recebido)}"],
+            total=valor_recebido,
+            data=data_recebimento,
+        ),
+        contrato["telefone"],
+    )
+    flash("Honorários de sucumbência registrados!")
     st.rerun()
 
 
@@ -2786,6 +3045,7 @@ def pagina_meus_contratos() -> None:
     _expander_editar(contrato_id, contrato, tutela)
     _expander_parcelas_iniciais(contrato_id, contrato)
     _expander_parcelas_liminar(contrato_id, contrato, tutela)
+    _expander_parcelas_exito(contrato_id, contrato)
 
 
 def _bloco_arquivamento(contrato_id: int, contrato: Any) -> None:
@@ -3234,7 +3494,139 @@ def _expander_parcelas_liminar(contrato_id: int, contrato: Any, tutela: str) -> 
             "🗑️ Apagar todas as parcelas da redução", key=f"pl_del_{contrato_id}", disabled=not confirmar
         ):
             exec_db("DELETE FROM parcelas_liminar WHERE contrato_id = %s", (contrato_id,))
+            exec_db("DELETE FROM parcelas_exito WHERE contrato_id = %s", (contrato_id,))
             flash("Parcelas da redução removidas.", "warning")
+            st.rerun()
+
+
+def _expander_parcelas_exito(contrato_id: int, contrato: Any) -> None:
+    """Cronograma dos honorários de êxito.
+
+    Pedido do escritório: dava para parcelar a redução da liminar, mas o êxito
+    só aceitava um recebimento de uma vez. O valor do êxito só é conhecido
+    quando a causa resolve, então o cronograma nasce aqui, depois — e não no
+    cadastro do contrato, onde só existe o percentual combinado.
+    """
+    with st.expander("🏆 Parcelas dos Honorários de Êxito", expanded=False):
+        df = select_db(
+            "SELECT * FROM parcelas_exito WHERE contrato_id = %s ORDER BY nr_parcela", (contrato_id,)
+        )
+
+        if df.empty:
+            recebido_de_uma_vez = int(_numero(contrato, "exito_pago")) == 1
+            if recebido_de_uma_vez:
+                st.info(
+                    "O êxito deste contrato já foi registrado como recebido de uma vez, "
+                    "em **💰 Pagamentos → 🏆 Êxito**. Para parcelar, estorne lá primeiro."
+                )
+                return
+
+            percentual = _numero(contrato, "hon_exito_percentual")
+            fixo = _numero(contrato, "hon_exito_fixo")
+            if percentual <= 0 and fixo <= 0:
+                st.info(
+                    "Nenhum honorário de êxito acordado neste contrato. "
+                    "Defina o percentual ou o valor fixo em **✏️ Editar Contrato**, acima."
+                )
+                return
+
+            st.info("Nenhuma parcela do êxito cadastrada para este contrato.")
+            if percentual > 0:
+                st.caption(
+                    f"Acordado: **{numero_br(percentual)}%** sobre o resultado. "
+                    "Informe abaixo o valor apurado."
+                )
+
+            st.markdown("**Cadastrar parcelas do êxito:**")
+            col1, col2, col3 = st.columns(3)
+            total = col1.number_input(
+                "Valor Total do Êxito (R$)", min_value=0.01, step=100.0, format="%.2f",
+                value=fixo or 100.0, key=f"pe_total_{contrato_id}",
+            )
+            quantidade = int(
+                col2.number_input(
+                    "Número de Parcelas", min_value=1, max_value=360, step=1, value=1,
+                    key=f"pe_qtd_{contrato_id}",
+                )
+            )
+            inicio = col3.date_input(
+                "Data da 1ª Parcela", value=hoje(), key=f"pe_inicio_{contrato_id}",
+                format=FORMATO_DATA_WIDGET,
+            )
+            resumo_parcelamento(total, quantidade, "Total do êxito")
+
+            if st.button("📥 Criar Parcelas do Êxito", type="primary", key=f"pe_btn_{contrato_id}"):
+                valores = dividir_parcelas(total, quantidade)
+                vencimentos = gerar_vencimentos(inicio, quantidade)
+                with transacao() as cur:
+                    execute_values(
+                        cur,
+                        """INSERT INTO parcelas_exito
+                           (contrato_id, nr_parcela, valor_parcela, data_prevista) VALUES %s""",
+                        [
+                            (contrato_id, numero, valor, vencimento.strftime("%Y-%m-%d"))
+                            for numero, (valor, vencimento) in enumerate(
+                                zip(valores, vencimentos), start=1
+                            )
+                        ],
+                    )
+                flash(f"{quantidade} parcela(s) do êxito criada(s) com sucesso!")
+                st.rerun()
+            return
+
+        numerico(df, "pago", "valor_parcela")
+        df["pago"] = df["pago"].astype(int)
+        total = df["valor_parcela"].sum()
+        recebido = df[df["pago"] == 1]["valor_parcela"].sum()
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total do Êxito", moeda(total))
+        col2.metric("Já Recebido", moeda(recebido))
+        col3.metric("A Receber", moeda(total - recebido))
+        proporcao = float(recebido / total) if total > 0 else 0.0
+        st.progress(proporcao, text=f"Progresso: {porcentagem(proporcao)} recebido")
+
+        _tabela_parcelas(df, "data_prevista", "Previsão")
+
+        pendentes = df[df["pago"] == 0]
+        if pendentes.empty:
+            st.success("🎉 Todas as parcelas do êxito já foram recebidas!")
+        else:
+            st.markdown("**Registrar Recebimento:**")
+            col_a, col_b = st.columns(2)
+            opcoes = {
+                f"Parcela {linha.nr_parcela} — Prev. {formatar_data(linha.data_prevista)} — "
+                f"{moeda(linha.valor_parcela)}": int(linha.nr_parcela)
+                for linha in pendentes.itertuples()
+            }
+            numero = opcoes[
+                col_a.selectbox("Qual parcela recebeu?", list(opcoes), key=f"mc_exi_sel_{contrato_id}")
+            ]
+            data_recebimento = col_b.date_input(
+                "Data do Recebimento", value=hoje(), key=f"mc_exi_data_{contrato_id}",
+                format=FORMATO_DATA_WIDGET,
+            )
+            st.caption(
+                f"Valor previsto da parcela {numero}: "
+                f"**{moeda(pendentes[pendentes['nr_parcela'] == numero]['valor_parcela'].iloc[0])}**"
+            )
+            if st.button(
+                "✅ Confirmar Recebimento da Parcela", type="primary", key=f"mc_exi_btn_{contrato_id}"
+            ):
+                _baixar_parcela_exito(contrato_id, numero, data_recebimento)
+                flash(f"Parcela {numero} do êxito marcada como recebida!")
+                st.rerun()
+
+        st.divider()
+        confirmar = st.checkbox(
+            "Confirmo que quero apagar TODAS as parcelas do êxito deste contrato.",
+            key=f"pe_del_conf_{contrato_id}",
+        )
+        if st.button(
+            "🗑️ Apagar todas as parcelas do êxito", key=f"pe_del_{contrato_id}", disabled=not confirmar
+        ):
+            exec_db("DELETE FROM parcelas_exito WHERE contrato_id = %s", (contrato_id,))
+            flash("Parcelas do êxito removidas.", "warning")
             st.rerun()
 
 
@@ -3324,7 +3716,7 @@ def pagina_gestao() -> None:
 
     with aba_backup:
         st.markdown(
-            "Baixe uma cópia completa das três tabelas em um único arquivo Excel "
+            "Baixe uma cópia completa das quatro tabelas em um único arquivo Excel "
             "(uma aba por tabela). Guarde periodicamente fora do Supabase."
         )
         if st.button("Gerar backup agora"):
@@ -3335,6 +3727,9 @@ def pagina_gestao() -> None:
                 "parcelas": select_db("SELECT * FROM parcelas ORDER BY contrato_id, nr_parcela", cache=False),
                 "parcelas_liminar": select_db(
                     "SELECT * FROM parcelas_liminar ORDER BY contrato_id, nr_parcela", cache=False
+                ),
+                "parcelas_exito": select_db(
+                    "SELECT * FROM parcelas_exito ORDER BY contrato_id, nr_parcela", cache=False
                 ),
             }
             buffer = io.BytesIO()
@@ -3364,10 +3759,11 @@ def pagina_gestao() -> None:
         except ErroBanco as erro:
             st.error(f"Estrutura do banco indisponível: {str(erro).strip()[:300]}")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Contratos", int(escalar("SELECT COUNT(*) FROM contratos")))
         col2.metric("Parcelas (iniciais)", int(escalar("SELECT COUNT(*) FROM parcelas")))
         col3.metric("Parcelas (liminar)", int(escalar("SELECT COUNT(*) FROM parcelas_liminar")))
+        col4.metric("Parcelas (êxito)", int(escalar("SELECT COUNT(*) FROM parcelas_exito")))
 
         parametros = _parametros_conexao()
         st.write(

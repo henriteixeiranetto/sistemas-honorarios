@@ -62,7 +62,7 @@ CONTRATOS = pd.DataFrame([
      "nr_processo": "0801234-55.2026.8.17.0001", "nr_vara": "3ª Vara Cível",
      "nome_juiz": "Dra. Helena Vasconcelos", "comarca": "Recife/PE",
      "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
-     "quitado_em": "", "arquivado_em": None},
+     "quitado_em": "", "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0},
     {"id": 11, "cliente": "Marcelo Soares de Albuquerque", "cpf_cnpj": "897.208.790-41",
      "telefone": "", "valor_total": 1234567.89, "saldo_devedor": 1226567.89,
      "data_contrato": _d(-95), "observacoes": "", "tutela": "Pendente",
@@ -74,7 +74,7 @@ CONTRATOS = pd.DataFrame([
      "nr_processo": "0809876-12.2026.8.17.0001", "nr_vara": "1ª Vara da Fazenda",
      "nome_juiz": "", "comarca": "Recife/PE",
      "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
-     "quitado_em": "", "arquivado_em": None},
+     "quitado_em": "", "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0},
     {"id": 14, "cliente": "Construtora Ação Ltda", "cpf_cnpj": "11.222.333/0001-81",
      "telefone": "(81) 3333-4444", "valor_total": 6500.0, "saldo_devedor": 0.0,
      "data_contrato": _d(-320), "observacoes": "Indicação do Dr. Guilherme",
@@ -85,7 +85,7 @@ CONTRATOS = pd.DataFrame([
      "hon_exito_percentual": 0.0, "hon_exito_fixo": 0.0,
      "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
      "exito_pago": 1, "exito_data_pagamento": _d(-30), "exito_valor_recebido": 12000.0,
-     "quitado_em": _d(-30), "arquivado_em": None},
+     "quitado_em": _d(-30), "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0},
 ])
 
 CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
@@ -100,6 +100,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
     "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
     "quitado_em": "", "arquivado_em": None,
+    "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
 }])], ignore_index=True)
 
 # Contrato já arquivado, para exercitar a lista de Arquivados e o botão de
@@ -118,6 +119,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
     "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
     "quitado_em": _d(-60), "arquivado_em": _d(-58),
+    "sucumbencia_recebida": 1, "sucumbencia_data": _d(-55), "sucumbencia_valor_recebido": 1800.0,
 }])], ignore_index=True)
 
 # O caso que o escritório relatou duas vezes: contrato sem honorário inicial,
@@ -136,6 +138,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
     "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
     "quitado_em": "", "arquivado_em": None,
+    "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
 }])], ignore_index=True)
 
 # Redução inteira recebida, mas o êxito por percentual continua em aberto: o
@@ -154,6 +157,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "nome_juiz": "", "comarca": "Recife",
     "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
     "quitado_em": _d(-20), "arquivado_em": None,
+    "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
 }])], ignore_index=True)
 
 PARCELAS = pd.DataFrame([
@@ -187,6 +191,16 @@ PARCELAS_LIMINAR = pd.DataFrame([
      "data_prevista": _d(-40), "data_pagamento": _d(-20), "pago": 1},
 ])
 
+# Êxito parcelado — o pedido novo do escritório. O José Caverna tem os três
+# tipos ao mesmo tempo (inicial, redução e êxito), que é o caso mais difícil
+# de somar sem contar nada duas vezes.
+PARCELAS_EXITO = pd.DataFrame([
+    {"id": 1, "contrato_id": 9, "nr_parcela": 1, "valor_parcela": 5000.0,
+     "data_prevista": _d(-15), "data_pagamento": _d(-14), "pago": 1},
+    {"id": 2, "contrato_id": 9, "nr_parcela": 2, "valor_parcela": 5000.0,
+     "data_prevista": _d(16), "data_pagamento": "", "pago": 0},
+])
+
 # Espelha o schema real de produção. As datas continuam em três tipos
 # diferentes (date, timestamp e text) — é dessa mistura que vieram os erros
 # de UNION e COALESCE. Dinheiro já está todo em numeric.
@@ -210,6 +224,9 @@ ESTRUTURA = pd.DataFrame(
             ("contratos", "exito_valor_recebido", "numeric", "YES"),
             ("contratos", "quitado_em", "text", "YES"),
             ("contratos", "arquivado_em", "text", "YES"),
+            ("contratos", "sucumbencia_recebida", "integer", "YES"),
+            ("contratos", "sucumbencia_data", "text", "YES"),
+            ("contratos", "sucumbencia_valor_recebido", "numeric", "YES"),
             ("parcelas", "valor_parcela", "numeric", "NO"),
             ("parcelas", "data_vencimento", "date", "NO"),
             ("parcelas", "data_pagamento", "timestamp without time zone", "YES"),
@@ -218,6 +235,10 @@ ESTRUTURA = pd.DataFrame(
             ("parcelas_liminar", "data_prevista", "text", "NO"),
             ("parcelas_liminar", "data_pagamento", "text", "YES"),
             ("parcelas_liminar", "pago", "integer", "YES"),
+            ("parcelas_exito", "valor_parcela", "numeric", "NO"),
+            ("parcelas_exito", "data_prevista", "text", "NO"),
+            ("parcelas_exito", "data_pagamento", "text", "YES"),
+            ("parcelas_exito", "pago", "integer", "YES"),
         ]
     ]
 )
@@ -230,6 +251,7 @@ def _componentes(contrato) -> dict:
     escrita de duas formas no sistema.
     """
     parcelas = PARCELAS_LIMINAR[PARCELAS_LIMINAR["contrato_id"] == contrato["id"]]
+    exito = PARCELAS_EXITO[PARCELAS_EXITO["contrato_id"] == contrato["id"]]
     return {
         "id": int(contrato["id"]),
         "inicial_total": float(contrato["valor_total"]),
@@ -244,6 +266,13 @@ def _componentes(contrato) -> dict:
         "exito_recebido": float(contrato["exito_valor_recebido"]),
         "exito_pago": int(contrato["exito_pago"]),
         "exito_percentual": float(contrato["hon_exito_percentual"]),
+        "exito_parcelas": int(len(exito)),
+        "exito_parc_total": float(exito["valor_parcela"].sum()),
+        "exito_parc_recebido": float(exito[exito["pago"] == 1]["valor_parcela"].sum()),
+        "sucumbencia_valor": float(
+            contrato["sucumbencia_valor_recebido"]
+            if int(contrato["sucumbencia_recebida"] or 0) == 1 else 0
+        ),
     }
 
 
@@ -266,12 +295,16 @@ def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
             (PARCELAS_LIMINAR["contrato_id"] == linha["id"]) & (PARCELAS_LIMINAR["pago"] == 0)
         ]
         tem_parcelas = (PARCELAS_LIMINAR["contrato_id"] == linha["id"]).any()
+        exito = PARCELAS_EXITO[PARCELAS_EXITO["contrato_id"] == linha["id"]]
         return pd.DataFrame([{
             "saldo_inicial": float(linha["saldo_devedor"]),
             "liminar_abertas": int(len(abertas)),
             "reducao_sem_parcelas": int(linha["hon_liminar_reducao_vlr"] > 0 and not tem_parcelas),
+            "exito_abertas": int(len(exito[exito["pago"] == 0])),
+            # Com cronograma, a pendência são as parcelas acima — não o acordo.
             "exito_em_aberto": int(
                 linha["exito_pago"] == 0
+                and len(exito) == 0
                 and (linha["hon_exito_percentual"] > 0 or linha["hon_exito_fixo"] > 0)
             ),
             "arquivado_em": linha["arquivado_em"],
@@ -354,6 +387,11 @@ def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
             return df[df["contrato_id"] == params[0]]
         return df
 
+    if principal == "parcelas_exito":
+        df = _do_contrato(PARCELAS_EXITO.copy())
+        if "pago = 0" in q:
+            df = df[df["pago"] == 0]
+        return df[["pago"]] if "select pago" in q else df
     if principal == "parcelas_liminar":
         df = _do_contrato(PARCELAS_LIMINAR.copy())
         if "pago = 0" in q:
