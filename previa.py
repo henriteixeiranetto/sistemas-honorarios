@@ -63,7 +63,8 @@ CONTRATOS = pd.DataFrame([
      "nome_juiz": "Dra. Helena Vasconcelos", "comarca": "Recife/PE",
      "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
      "quitado_em": "", "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
-     "tipo_acao": "Cobertura médica", "origem_cliente": "Indicação"},
+     "tipo_acao": "Cobertura médica", "origem_cliente": "Indicação",
+     "exito_valor_parte": 50000.0},
     {"id": 11, "cliente": "Marcelo Soares de Albuquerque", "cpf_cnpj": "897.208.790-41",
      "telefone": "", "valor_total": 1234567.89, "saldo_devedor": 1226567.89,
      "data_contrato": _d(-95), "observacoes": "", "tutela": "Pendente",
@@ -76,7 +77,8 @@ CONTRATOS = pd.DataFrame([
      "nome_juiz": "", "comarca": "Recife/PE",
      "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
      "quitado_em": "", "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
-     "tipo_acao": "Plano individual antigo", "origem_cliente": "Lead"},
+     "tipo_acao": "Plano individual antigo", "origem_cliente": "Lead",
+     "exito_valor_parte": None},
     {"id": 14, "cliente": "Construtora Ação Ltda", "cpf_cnpj": "11.222.333/0001-81",
      "telefone": "(81) 3333-4444", "valor_total": 6500.0, "saldo_devedor": 0.0,
      "data_contrato": _d(-320), "observacoes": "Indicação do Dr. Guilherme",
@@ -88,7 +90,8 @@ CONTRATOS = pd.DataFrame([
      "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
      "exito_pago": 1, "exito_data_pagamento": _d(-30), "exito_valor_recebido": 12000.0,
      "quitado_em": _d(-30), "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
-     "tipo_acao": "Cobrança / Execução", "origem_cliente": "Parceria"},
+     "tipo_acao": "Cobrança / Execução", "origem_cliente": "Parceria",
+     "exito_valor_parte": None},
 ])
 
 CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
@@ -105,6 +108,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "quitado_em": "", "arquivado_em": None,
     "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
     "tipo_acao": "Falso coletivo", "origem_cliente": "Próprio",
+    "exito_valor_parte": None,
 }])], ignore_index=True)
 
 # Contrato já arquivado, para exercitar a lista de Arquivados e o botão de
@@ -125,6 +129,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "quitado_em": _d(-60), "arquivado_em": _d(-58),
     "sucumbencia_recebida": 1, "sucumbencia_data": _d(-55), "sucumbencia_valor_recebido": 1800.0,
     "tipo_acao": "Direito do consumidor", "origem_cliente": "Referência (advogado)",
+    "exito_valor_parte": None,
 }])], ignore_index=True)
 
 # O caso que o escritório relatou duas vezes: contrato sem honorário inicial,
@@ -145,6 +150,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "quitado_em": "", "arquivado_em": None,
     "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
     "tipo_acao": "Coletivo por adesão", "origem_cliente": "Parceria",
+    "exito_valor_parte": None,
 }])], ignore_index=True)
 
 # Redução inteira recebida, mas o êxito por percentual continua em aberto: o
@@ -252,6 +258,7 @@ ESTRUTURA = pd.DataFrame(
             ("contratos", "sucumbencia_valor_recebido", "numeric", "YES"),
             ("contratos", "tipo_acao", "text", "YES"),
             ("contratos", "origem_cliente", "text", "YES"),
+            ("contratos", "exito_valor_parte", "numeric", "YES"),
             ("parcelas", "valor_parcela", "numeric", "NO"),
             ("parcelas", "data_vencimento", "date", "NO"),
             ("parcelas", "data_pagamento", "timestamp without time zone", "YES"),

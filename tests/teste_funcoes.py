@@ -540,4 +540,42 @@ r.verdadeiro(
 r.checar("origem do cliente nasce com 5 opções", len(fin.OPCOES_INICIAIS["origem_cliente"][1]), 5)
 
 
+r.secao("[20] Honorários de êxito calculados sobre o valor da parte")
+# Pedido da advogada: o percentual do contrato incide sobre o que a PARTE
+# recebe. Ela vinha fazendo a conta de cabeça e digitando só o resultado, e a
+# base do cálculo se perdia.
+
+r.checar("30% de 100 mil", fin.honorario_exito(100000, 30), 30000.0)
+r.checar("25% de 80 mil", fin.honorario_exito(80000, 25), 20000.0)
+r.checar("20% de 4.248,44", fin.honorario_exito(4248.44, 20), 849.69)
+
+# Arredondamento em centavos: o resultado não pode sair com mais de 2 casas,
+# senão a soma das parcelas nunca fecha com o total.
+bruto = fin.honorario_exito(3333.33, 33.33)
+r.checar("arredonda para centavos", bruto, round(bruto, 2))
+r.verdadeiro("e continua com 2 casas", len(str(bruto).split(".")[-1]) <= 2)
+
+r.checar("percentual zero não cobra nada", fin.honorario_exito(100000, 0), 0.0)
+r.checar("valor zero não gera honorário", fin.honorario_exito(0, 30), 0.0)
+r.checar("valor negativo não vira crédito", fin.honorario_exito(-5000, 30), 0.0)
+r.checar("nulo não quebra", fin.honorario_exito(None, None), 0.0)
+r.checar("texto não quebra", fin.honorario_exito("abc", 30), 0.0)
+
+# A conta precisa aparecer na tela para ela conferir antes de confirmar.
+texto = fin.conta_do_exito(100000, 30, 30000)
+# Percentual em pt-BR, com vírgula: "30,00%".
+r.verdadeiro("mostra o percentual", "30,00%" in texto)
+r.verdadeiro("mostra a base", "100.000,00" in texto)
+r.verdadeiro("mostra o resultado", "30.000,00" in texto)
+# Dois "R$" na mesma frase viram fórmula LaTeX no markdown do Streamlit.
+r.checar("os dois cifrões escapados", texto.count(r"R\$"), 2)
+
+# O caso que ela descreveu, ponta a ponta: 100 mil para a parte, 30% para o
+# escritório, dividido em 3 parcelas.
+honorario = fin.honorario_exito(100000, 30)
+parcelas = fin.dividir_parcelas(honorario, 3)
+r.checar("parcelas somam o honorário", sum(parcelas), honorario)
+r.checar("e não o valor da parte", sum(parcelas) != 100000, True)
+
+
 sys.exit(r.encerrar())

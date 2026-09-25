@@ -680,6 +680,10 @@ COLUNAS_EXTRAS: list[tuple[str, str]] = [
     # continuam mostrando o que foi escolhido na época.
     ("tipo_acao", "TEXT"),
     ("origem_cliente", "TEXT"),
+    # Quanto a PARTE recebeu. O percentual do contrato incide sobre isto, e
+    # não sobre os honorários. Guardar a base junto com o resultado é o que
+    # permite conferir a conta depois.
+    ("exito_valor_parte", "NUMERIC(14,2)"),
 ]
 
 # Só entram no banco na primeira execução, quando a categoria ainda está
@@ -1823,6 +1827,32 @@ def seletor_de_lista(categoria: str, chave: str, valor_atual: Any = None, coluna
     return "" if escolhido == SEM_ESCOLHA else escolhido
 
 
+def honorario_exito(valor_parte: Any, percentual: Any) -> float:
+    """Quanto cabe ao escritório num êxito de `valor_parte`.
+
+    O percentual do contrato incide sobre o que a PARTE AUTORA recebe, não
+    sobre os honorários. O escritório vinha fazendo essa conta de cabeça e
+    digitando só o resultado — e aí o valor que originou o honorário se
+    perdia, sem como conferir depois de onde saíram os 30%.
+    """
+    try:
+        base = float(valor_parte or 0)
+        taxa = float(percentual or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if base <= 0 or taxa <= 0:
+        return 0.0
+    return round(base * taxa / 100, 2)
+
+
+def conta_do_exito(valor_parte: float, percentual: float, honorario: float) -> str:
+    """A conta por extenso, para conferir antes de confirmar."""
+    return (
+        f"Honorários de êxito: **{numero_br(percentual)}%** de "
+        f"{moeda_md(valor_parte)} = **{moeda_md(honorario)}**"
+    )
+
+
 def _numero(linha: Any, campo: str) -> float:
     """Campo do banco como float, sem quebrar com NULL nem com texto."""
     try:
@@ -2746,11 +2776,20 @@ def _tab_exito(contrato_id: int, contrato: Any) -> None:
     if ja_pago == 1:
         recebido = float(contrato.get("exito_valor_recebido") or 0)
         data_recebido = formatar_data(contrato.get("exito_data_pagamento"))
-        st.success(f"🏆 Honorários de êxito já recebidos em **{data_recebido}**: **{moeda_md(recebido)}**")
+        base = _numero(contrato, "exito_valor_parte")
+        origem = (
+            f" — {numero_br(percentual)}% de {moeda_md(base)} recebidos pela parte"
+            if base > 0 and percentual > 0 else ""
+        )
+        st.success(
+            f"🏆 Honorários de êxito já recebidos em **{data_recebido}**: "
+            f"**{moeda_md(recebido)}**{origem}"
+        )
         if st.button("↩️ Estornar recebimento de êxito", key=f"exit_estorno_{contrato_id}"):
             exec_db(
                 """UPDATE contratos
-                      SET exito_pago = 0, exito_data_pagamento = NULL, exito_valor_recebido = NULL
+                      SET exito_pago = 0, exito_data_pagamento = NULL,
+                          exito_valor_recebido = NULL, exito_valor_parte = NULL
                     WHERE id = %s""",
                 (contrato_id,),
             )
@@ -2768,29 +2807,58 @@ def _tab_exito(contrato_id: int, contrato: Any) -> None:
     )
 
     col1, col2 = st.columns(2)
-    valor_recebido = col1.number_input(
-        "Valor Recebido (R$)",
-        min_value=0.01, step=100.0, format="%.2f",
-        value=fixo if fixo > 0 else 100.0,
-        key=f"exit_vlr_{contrato_id}",
-    )
+    if percentual > 0:
+        # O escritório digitava aqui o próprio honorário, calculando o
+        # percentual de cabeça. Agora informa o que a parte recebeu e a conta
+        # é do sistema — que é o que o percentual do contrato quer dizer.
+        valor_parte = col1.number_input(
+            "Valor total recebido pela parte (R$)",
+            min_value=0.0, step=100.0, format="%.2f", value=0.0,
+            key=f"exit_parte_{contrato_id}",
+            help="O quanto o cliente recebeu. O percentual do contrato incide sobre este valor.",
+        )
+        valor_recebido = honorario_exito(valor_parte, percentual)
+    else:
+        valor_parte = 0.0
+        valor_recebido = col1.number_input(
+            "Valor Recebido (R$)",
+            min_value=0.0, step=100.0, format="%.2f", value=fixo,
+            key=f"exit_vlr_{contrato_id}",
+        )
     data_recebimento = col2.date_input("Data do Recebimento", value=hoje(), key=f"exit_data_{contrato_id}", format=FORMATO_DATA_WIDGET)
+
+    if percentual > 0 and valor_parte > 0:
+        st.success(conta_do_exito(valor_parte, percentual, valor_recebido))
 
     if not st.button("🏆 Confirmar Recebimento de Êxito", type="primary", key=f"exit_btn_{contrato_id}"):
         return
 
+    if valor_recebido <= 0:
+        st.error(
+            "Informe o valor total recebido pela parte."
+            if percentual > 0 else "Informe o valor recebido."
+        )
+        return
+
     exec_db(
         """UPDATE contratos
-              SET exito_pago = 1, exito_data_pagamento = %s, exito_valor_recebido = %s
+              SET exito_pago = 1, exito_data_pagamento = %s, exito_valor_recebido = %s,
+                  exito_valor_parte = %s
             WHERE id = %s""",
-        (data_recebimento.strftime("%Y-%m-%d"), valor_recebido, contrato_id),
+        (data_recebimento.strftime("%Y-%m-%d"), valor_recebido, valor_parte or None, contrato_id),
     )
     registrar_recibo(
         montar_recibo(
             titulo="RECIBO — HONORÁRIOS DE ÊXITO",
             cliente=contrato["cliente"],
             documento=contrato["cpf_cnpj"],
-            itens=[f"🏆 Honorários de Êxito: {moeda(valor_recebido)}"],
+            itens=[
+                f"🏆 Honorários de Êxito: {moeda(valor_recebido)}"
+                + (
+                    f" ({numero_br(percentual)}% de {moeda(valor_parte)})"
+                    if valor_parte > 0 and percentual > 0 else ""
+                )
+            ],
             total=valor_recebido,
             data=data_recebimento,
         ),
@@ -3627,7 +3695,6 @@ def _expander_parcelas_liminar(contrato_id: int, contrato: Any, tutela: str) -> 
             "🗑️ Apagar todas as parcelas da redução", key=f"pl_del_{contrato_id}", disabled=not confirmar
         ):
             exec_db("DELETE FROM parcelas_liminar WHERE contrato_id = %s", (contrato_id,))
-            exec_db("DELETE FROM parcelas_exito WHERE contrato_id = %s", (contrato_id,))
             flash("Parcelas da redução removidas.", "warning")
             st.rerun()
 
@@ -3664,18 +3731,26 @@ def _expander_parcelas_exito(contrato_id: int, contrato: Any) -> None:
                 return
 
             st.info("Nenhuma parcela do êxito cadastrada para este contrato.")
-            if percentual > 0:
-                st.caption(
-                    f"Acordado: **{numero_br(percentual)}%** sobre o resultado. "
-                    "Informe abaixo o valor apurado."
-                )
 
             st.markdown("**Cadastrar parcelas do êxito:**")
             col1, col2, col3 = st.columns(3)
-            total = col1.number_input(
-                "Valor Total do Êxito (R$)", min_value=0.01, step=100.0, format="%.2f",
-                value=fixo or 100.0, key=f"pe_total_{contrato_id}",
-            )
+            if percentual > 0:
+                # Com percentual acordado, quem entra é o valor da PARTE; o
+                # honorário é consequência. Pedir o honorário aqui obrigaria a
+                # calcular de cabeça e jogaria fora a base do cálculo.
+                valor_parte = col1.number_input(
+                    "Valor total recebido pela parte (R$)",
+                    min_value=0.0, step=100.0, format="%.2f", value=0.0,
+                    key=f"pe_parte_{contrato_id}",
+                    help=f"Os {numero_br(percentual)}% do contrato incidem sobre este valor.",
+                )
+                total = honorario_exito(valor_parte, percentual)
+            else:
+                valor_parte = 0.0
+                total = col1.number_input(
+                    "Valor Total do Êxito (R$)", min_value=0.0, step=100.0, format="%.2f",
+                    value=fixo, key=f"pe_total_{contrato_id}",
+                )
             quantidade = int(
                 col2.number_input(
                     "Número de Parcelas", min_value=1, max_value=360, step=1, value=1,
@@ -3686,9 +3761,19 @@ def _expander_parcelas_exito(contrato_id: int, contrato: Any) -> None:
                 "Data da 1ª Parcela", value=hoje(), key=f"pe_inicio_{contrato_id}",
                 format=FORMATO_DATA_WIDGET,
             )
-            resumo_parcelamento(total, quantidade, "Total do êxito")
+
+            if percentual > 0 and valor_parte > 0:
+                st.success(conta_do_exito(valor_parte, percentual, total))
+            if total > 0:
+                resumo_parcelamento(total, quantidade, "Honorários de êxito")
 
             if st.button("📥 Criar Parcelas do Êxito", type="primary", key=f"pe_btn_{contrato_id}"):
+                if total <= 0:
+                    st.error(
+                        "Informe o valor total recebido pela parte."
+                        if percentual > 0 else "Informe o valor total do êxito."
+                    )
+                    return
                 valores = dividir_parcelas(total, quantidade)
                 vencimentos = gerar_vencimentos(inicio, quantidade)
                 with transacao() as cur:
@@ -3703,6 +3788,11 @@ def _expander_parcelas_exito(contrato_id: int, contrato: Any) -> None:
                             )
                         ],
                     )
+                    if valor_parte > 0:
+                        cur.execute(
+                            "UPDATE contratos SET exito_valor_parte = %s WHERE id = %s",
+                            (valor_parte, contrato_id),
+                        )
                 flash(f"{quantidade} parcela(s) do êxito criada(s) com sucesso!")
                 st.rerun()
             return
@@ -3718,6 +3808,14 @@ def _expander_parcelas_exito(contrato_id: int, contrato: Any) -> None:
         col3.metric("A Receber", moeda(total - recebido))
         proporcao = float(recebido / total) if total > 0 else 0.0
         st.progress(proporcao, text=f"Progresso: {porcentagem(proporcao)} recebido")
+
+        base = _numero(contrato, "exito_valor_parte")
+        percentual_contrato = _numero(contrato, "hon_exito_percentual")
+        if base > 0 and percentual_contrato > 0:
+            st.caption(
+                f"Calculado sobre {moeda_md(base)} recebidos pela parte "
+                f"({numero_br(percentual_contrato)}%)."
+            )
 
         _tabela_parcelas(df, "data_prevista", "Previsão")
 
@@ -3759,6 +3857,9 @@ def _expander_parcelas_exito(contrato_id: int, contrato: Any) -> None:
             "🗑️ Apagar todas as parcelas do êxito", key=f"pe_del_{contrato_id}", disabled=not confirmar
         ):
             exec_db("DELETE FROM parcelas_exito WHERE contrato_id = %s", (contrato_id,))
+            # A base do cálculo era deste cronograma; sem ele, não descreve
+            # mais nada e ficaria sobrando num contrato sem êxito lançado.
+            exec_db("UPDATE contratos SET exito_valor_parte = NULL WHERE id = %s", (contrato_id,))
             flash("Parcelas do êxito removidas.", "warning")
             st.rerun()
 

@@ -59,6 +59,25 @@ O **êxito por percentual** fica fora do total enquanto não é recebido nem
 parcelado. O valor depende do resultado da causa, e somá-lo como incógnita
 faria a barra de progresso nunca fechar em 100%.
 
+### Como se lança o valor do êxito
+
+O percentual do contrato incide sobre **o que a parte autora recebe**, não
+sobre os honorários. Por isso o campo pede o valor da parte e o sistema faz a
+conta:
+
+```
+Valor total recebido pela parte:  R$ 100.000,00
+Honorários de êxito: 20,00% de R$ 100.000,00 = R$ 20.000,00
+```
+
+São os R$ 20.000,00 que viram o recebimento ou o cronograma de parcelas. O
+valor da parte fica gravado em `exito_valor_parte`, e é o que permite conferir
+depois de onde saiu o honorário — antes essa base se perdia, porque só o
+resultado da conta era digitado.
+
+Quando o contrato tem **valor fixo** de êxito em vez de percentual, não há
+conta a fazer: o campo pede o próprio honorário, como sempre foi.
+
 A **sucumbência** entra no total e no recebido ao mesmo tempo, nunca como
 pendência: só se sabe quanto é quando o dinheiro entra.
 
