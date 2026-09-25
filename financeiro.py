@@ -297,18 +297,34 @@ st.markdown(
 
         hr { border-color: var(--linha) !important; }
 
-        /* Some com a barra do Streamlit para o sistema parecer um produto,
-           não um script publicado. Esconde só a barra de ferramentas: o
-           cabeçalho inteiro não pode sumir porque é nele que fica o botão de
-           reabrir a barra lateral — sem ele, quem recolhesse o menu ficaria
-           sem como trazê-lo de volta. */
+        /* Some com a marca do Streamlit para o sistema parecer um produto, e
+           não um script publicado.
+
+           CUIDADO AO MEXER AQUI. O botão que reabre a barra lateral mora
+           dentro da barra de ferramentas, e filho de elemento com
+           `display: none` não volta nem com `!important`. Já aconteceu duas
+           vezes: primeiro escondendo o cabeçalho inteiro, depois escondendo a
+           barra de ferramentas inteira — nas duas, quem recolhia o menu
+           ficava sem como trazê-lo de volta e precisava saber que bastava
+           recarregar a página.
+
+           Por isso os alvos são o botão "Deploy" e o menu de três pontos, um
+           a um, e nunca a barra que os contém junto com o botão de reabrir. */
         #MainMenu,
-        [data-testid="stToolbar"],
+        [data-testid="stMainMenu"],
+        [data-testid="stAppDeployButton"],
+        [data-testid="stToolbarActions"],
         [data-testid="stDecoration"],
         [data-testid="stStatusWidget"],
         footer { display: none !important; }
 
-        header[data-testid="stHeader"] { background: transparent; height: 0; }
+        header[data-testid="stHeader"] { background: transparent; }
+
+        /* Dois nomes: o Streamlit renomeou este botão de
+           `stSidebarCollapsedControl` para `stExpandSidebarButton`. Manter os
+           dois evita que uma atualização volte a esconder o botão em
+           silêncio. */
+        [data-testid="stExpandSidebarButton"],
         [data-testid="stSidebarCollapsedControl"] { display: flex !important; }
     </style>
     """,

@@ -578,4 +578,47 @@ r.checar("parcelas somam o honorário", sum(parcelas), honorario)
 r.checar("e não o valor da parte", sum(parcelas) != 100000, True)
 
 
+r.secao("[21] O botão de reabrir a barra lateral não pode ser escondido")
+# Já aconteceu duas vezes: o CSS escondia o cabeçalho inteiro, depois a barra
+# de ferramentas inteira. Nas duas, o botão que reabre o menu ia junto — e
+# quem recolhesse a barra lateral ficava preso, porque filho de elemento com
+# `display: none` não volta nem com `!important`.
+
+import re as _re  # noqa: E402
+
+from carregar import ORIGEM  # noqa: E402
+
+_fonte = ORIGEM.read_text(encoding="utf-8")
+
+# Todos os testids que o CSS manda esconder.
+_escondidos: set[str] = set()
+for _grupo in _re.findall(r"([^{}]*)\{[^{}]*display:\s*none[^{}]*\}", _fonte):
+    _escondidos.update(_re.findall(r'\[data-testid="([^"]+)"\]', _grupo))
+
+# Recipientes do botão de reabrir. Esconder qualquer um deles prende o usuário.
+for _recipiente in ("stToolbar", "stHeader", "stSidebar", "stAppViewContainer", "stApp"):
+    r.verdadeiro(f"CSS não esconde {_recipiente}", _recipiente not in _escondidos)
+
+r.verdadeiro(
+    "e força o botão de reabrir a aparecer",
+    'data-testid="stExpandSidebarButton"' in _fonte,
+)
+# O Streamlit renomeou o botão; manter o nome antigo evita que uma atualização
+# volte a escondê-lo em silêncio.
+r.verdadeiro(
+    "mantém também o nome antigo do botão",
+    'data-testid="stSidebarCollapsedControl"' in _fonte,
+)
+# O "Deploy" e o menu de três pontos continuam escondidos: é o que se queria
+# desde o começo, sem levar o botão de reabrir junto.
+r.verdadeiro("Deploy escondido", "stAppDeployButton" in _escondidos)
+r.verdadeiro("menu de três pontos escondido", "stMainMenu" in _escondidos)
+
+# A barra lateral precisa nascer aberta.
+r.verdadeiro(
+    "barra lateral nasce aberta",
+    'initial_sidebar_state="expanded"' in _fonte,
+)
+
+
 sys.exit(r.encerrar())
