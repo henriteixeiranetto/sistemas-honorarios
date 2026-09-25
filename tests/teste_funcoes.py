@@ -485,4 +485,59 @@ r.verdadeiro("singular sem 's'", "1 parcela do êxito" in _pend(exito_abertas=1)
 r.checar("sem parcela aberta, sem pendência de êxito", _pend(exito_abertas=0), [])
 
 
+r.secao("[19] Listas que o escritório mantém")
+# O advogado pediu para poder criar um tipo de ação novo sem depender de
+# ninguém. As opções passaram a morar no banco, e a lista de escolha precisa
+# aguentar duas situações: contrato antigo sem classificação, e contrato
+# marcado com uma opção que depois foi apagada da lista.
+
+LISTA = ["Cobertura médica", "Falso coletivo"]
+_original = fin.select_db
+fin.select_db = lambda *a, **k: pd.DataFrame({"valor": LISTA})
+try:
+    r.checar("lista vem do banco", fin.opcoes_de("tipo_acao"), LISTA)
+
+    vazio = fin.lista_para_selecao("tipo_acao", None)
+    r.checar("sem escolha entra na frente", vazio[0], fin.SEM_ESCOLHA)
+    r.checar("e as opções vêm depois", vazio[1:], LISTA)
+
+    r.checar(
+        "valor já gravado não duplica",
+        fin.lista_para_selecao("tipo_acao", "Falso coletivo"),
+        [fin.SEM_ESCOLHA] + LISTA,
+    )
+
+    # Regressão: se a opção foi apagada da lista, o contrato que a usava não
+    # pode perder a classificação em silêncio ao ser editado.
+    apagada = fin.lista_para_selecao("tipo_acao", "Home care")
+    r.verdadeiro("opção apagada continua selecionável", "Home care" in apagada)
+    r.checar("e aparece logo após o vazio", apagada[1], "Home care")
+
+    r.checar("texto vazio não vira opção", fin.lista_para_selecao("tipo_acao", "  "),
+             [fin.SEM_ESCOLHA] + LISTA)
+finally:
+    fin.select_db = _original
+
+fin.select_db = lambda *a, **k: pd.DataFrame()
+try:
+    r.checar("categoria sem nada devolve lista vazia", fin.opcoes_de("tipo_acao"), [])
+    r.checar(
+        "e a seleção ainda oferece o vazio",
+        fin.lista_para_selecao("tipo_acao", None),
+        [fin.SEM_ESCOLHA],
+    )
+finally:
+    fin.select_db = _original
+
+# As categorias do código têm de bater com as colunas gravadas no contrato.
+colunas = [nome for nome, _ in fin.COLUNAS_EXTRAS]
+for categoria in fin.OPCOES_INICIAIS:
+    r.verdadeiro(f"coluna {categoria} existe no contrato", categoria in colunas)
+r.verdadeiro(
+    "tipo da ação nasce com as opções do escritório",
+    "Falso coletivo" in fin.OPCOES_INICIAIS["tipo_acao"][1],
+)
+r.checar("origem do cliente nasce com 5 opções", len(fin.OPCOES_INICIAIS["origem_cliente"][1]), 5)
+
+
 sys.exit(r.encerrar())

@@ -613,6 +613,17 @@ CREATE TABLE IF NOT EXISTS parcelas_liminar (
 )
 """
 
+DDL_OPCOES = """
+-- Listas que o escritório mantém sozinho. O advogado pediu para poder criar
+-- um tipo de ação novo sem depender de alguém mexer no código, então as
+-- opções moram no banco e não numa constante aqui.
+CREATE TABLE IF NOT EXISTS opcoes (
+    id        SERIAL PRIMARY KEY,
+    categoria TEXT NOT NULL,
+    valor     TEXT NOT NULL
+)
+"""
+
 DDL_PARCELAS_EXITO = """
 -- Mesma estrutura das parcelas da redução, de propósito: o êxito passou a ser
 -- parcelado a pedido do escritório, e repetir o formato deixa as duas telas
@@ -664,7 +675,34 @@ COLUNAS_EXTRAS: list[tuple[str, str]] = [
     ("sucumbencia_recebida", "INTEGER"),
     ("sucumbencia_data", "TEXT"),
     ("sucumbencia_valor_recebido", "NUMERIC(14,2)"),
+    # Classificações do contrato. TEXT e não chave estrangeira de propósito:
+    # se alguém apagar uma opção da lista, os contratos que já a usavam
+    # continuam mostrando o que foi escolhido na época.
+    ("tipo_acao", "TEXT"),
+    ("origem_cliente", "TEXT"),
 ]
+
+# Só entram no banco na primeira execução, quando a categoria ainda está
+# vazia. Depois disso a lista é do escritório: o que eles apagarem não volta
+# no próximo deploy.
+OPCOES_INICIAIS: dict[str, tuple[str, list[str]]] = {
+    "tipo_acao": (
+        "Tipo da Ação",
+        [
+            "Falso coletivo",
+            "Plano individual antigo",
+            "Coletivo por adesão",
+            "Cobertura médica",
+            "Direito do consumidor",
+            "Cobrança / Execução",
+            "Consultoria mensal",
+        ],
+    ),
+    "origem_cliente": (
+        "Origem do Cliente",
+        ["Parceria", "Indicação", "Referência (advogado)", "Lead", "Próprio"],
+    ),
+}
 
 INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_parcelas_contrato ON parcelas (contrato_id)",
@@ -674,6 +712,7 @@ INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_plim_prevista ON parcelas_liminar (data_prevista) WHERE pago = 0",
     "CREATE INDEX IF NOT EXISTS idx_pexi_contrato ON parcelas_exito (contrato_id)",
     "CREATE INDEX IF NOT EXISTS idx_pexi_prevista ON parcelas_exito (data_prevista) WHERE pago = 0",
+    "CREATE INDEX IF NOT EXISTS idx_opcoes_categoria ON opcoes (categoria)",
     "CREATE INDEX IF NOT EXISTS idx_contratos_saldo ON contratos (saldo_devedor)",
     "CREATE INDEX IF NOT EXISTS idx_contratos_cliente ON contratos (cliente)",
 ]
@@ -704,10 +743,23 @@ def inicializar_banco() -> dict[str, Any]:
         cur.execute(DDL_PARCELAS)
         cur.execute(DDL_PARCELAS_LIMINAR)
         cur.execute(DDL_PARCELAS_EXITO)
+        cur.execute(DDL_OPCOES)
         for coluna, tipo in COLUNAS_EXTRAS:
             cur.execute(f"ALTER TABLE contratos ADD COLUMN IF NOT EXISTS {coluna} {tipo}")
         for indice in INDICES:
             cur.execute(indice)
+
+        # Semente única por categoria: se já houver qualquer opção, o sistema
+        # não mexe. Assim uma opção apagada pelo escritório não ressuscita no
+        # deploy seguinte.
+        for categoria, (_, padroes) in OPCOES_INICIAIS.items():
+            cur.execute("SELECT COUNT(*) FROM opcoes WHERE categoria = %s", (categoria,))
+            if int(cur.fetchone()[0]) == 0:
+                execute_values(
+                    cur,
+                    "INSERT INTO opcoes (categoria, valor) VALUES %s",
+                    [(categoria, valor) for valor in padroes],
+                )
 
     # Estes são opcionais: falham se o banco já tiver parcelas duplicadas de
     # antes. Não impedem o sistema de funcionar, então viram apenas aviso.
@@ -1089,6 +1141,8 @@ def cabecalho_marca(subtitulo: str = "") -> None:
 def linha_processo(registro: Any) -> str:
     partes = []
     for campo, rotulo in (
+        ("tipo_acao", "⚖️ Tipo"),
+        ("origem_cliente", "🔗 Origem"),
         ("nr_processo", "📄 Processo"),
         ("nr_vara", "🏛️ Vara"),
         ("nome_juiz", "👨‍⚖️ Juiz"),
@@ -1702,10 +1756,71 @@ INSERT INTO contratos
      hon_inicial_parcelas, hon_inicial_vlr_parcela,
      hon_liminar_reducao_vlr, hon_liminar_reducao_prc,
      hon_exito_percentual, hon_exito_fixo,
-     nr_processo, nr_vara, nome_juiz, comarca)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+     nr_processo, nr_vara, nome_juiz, comarca,
+     tipo_acao, origem_cliente)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 RETURNING id
 """
+
+
+SEM_ESCOLHA = "—"
+
+
+def opcoes_de(categoria: str) -> list[str]:
+    df = select_db(
+        "SELECT valor FROM opcoes WHERE categoria = %s ORDER BY valor", (categoria,)
+    )
+    return [] if df.empty else [str(v) for v in df["valor"]]
+
+
+def lista_para_selecao(categoria: str, valor_atual: Any = None) -> list[str]:
+    """Opções da lista, com o valor já gravado garantido dentro dela.
+
+    Sem isto, apagar uma opção faria os contratos que a usavam perderem a
+    classificação em silêncio na próxima edição.
+    """
+    opcoes = opcoes_de(categoria)
+    atual = "" if nulo(valor_atual) else str(valor_atual).strip()
+    if atual and atual not in opcoes:
+        opcoes = [atual] + opcoes
+    return [SEM_ESCOLHA] + opcoes
+
+
+def seletor_de_lista(categoria: str, chave: str, valor_atual: Any = None, coluna: Any = None) -> str:
+    """Selectbox da lista + um "➕" para criar uma opção nova na hora.
+
+    O advogado pediu para poder acrescentar um tipo de ação sem depender de
+    alguém mexer no sistema, e pediu isso na tela onde ele cadastra — por isso
+    o botão fica aqui embaixo, e não escondido em Gestão.
+    """
+    rotulo, _ = OPCOES_INICIAIS[categoria]
+    opcoes = lista_para_selecao(categoria, valor_atual)
+    atual = "" if nulo(valor_atual) else str(valor_atual).strip()
+    indice = opcoes.index(atual) if atual in opcoes else 0
+
+    destino = coluna if coluna is not None else st
+    escolhido = destino.selectbox(rotulo, opcoes, index=indice, key=f"sel_{categoria}_{chave}")
+
+    with destino.expander(f"➕ Adicionar {rotulo.lower()}", expanded=False):
+        novo = st.text_input(
+            "Nome da nova opção", key=f"novo_{categoria}_{chave}",
+            placeholder="Ex: Home care",
+        )
+        if st.button("Adicionar à lista", key=f"add_{categoria}_{chave}"):
+            limpo = novo.strip()
+            if not limpo:
+                st.warning("Escreva o nome da opção antes de adicionar.")
+            elif limpo in opcoes_de(categoria):
+                st.warning(f"**{limpo}** já está na lista.")
+            else:
+                exec_db(
+                    "INSERT INTO opcoes (categoria, valor) VALUES (%s, %s)", (categoria, limpo)
+                )
+                st.session_state[f"sel_{categoria}_{chave}"] = limpo
+                flash(f"**{limpo}** adicionado à lista de {rotulo.lower()}.")
+                st.rerun()
+
+    return "" if escolhido == SEM_ESCOLHA else escolhido
 
 
 def _numero(linha: Any, campo: str) -> float:
@@ -2158,6 +2273,10 @@ def pagina_novo_contrato() -> None:
     telefone = col1.text_input("Telefone (somente números)", placeholder="Ex: 11999998888")
     data_contrato = col2.date_input("Data do Contrato", value=hoje(), format=FORMATO_DATA_WIDGET)
 
+    col3, col4 = st.columns(2)
+    tipo_acao = seletor_de_lista("tipo_acao", "novo", coluna=col3)
+    origem_cliente = seletor_de_lista("origem_cliente", "novo", coluna=col4)
+
     st.divider()
 
     st.subheader("💰 Honorários Iniciais")
@@ -2295,6 +2414,8 @@ def pagina_novo_contrato() -> None:
                 nr_vara.strip() or None,
                 nome_juiz.strip() or None,
                 comarca.strip() or None,
+                tipo_acao or None,
+                origem_cliente or None,
             ),
         )
         contrato_id = cur.fetchone()[0]
@@ -3127,6 +3248,14 @@ def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
             "Observações", value=str(contrato["observacoes"] or ""), key=f"ed_obs_{contrato_id}"
         )
 
+        col_tipo, col_origem = st.columns(2)
+        tipo_acao = seletor_de_lista(
+            "tipo_acao", f"ed{contrato_id}", contrato.get("tipo_acao"), coluna=col_tipo
+        )
+        origem_cliente = seletor_de_lista(
+            "origem_cliente", f"ed{contrato_id}", contrato.get("origem_cliente"), coluna=col_origem
+        )
+
         st.subheader("💰 Honorários Iniciais")
         col3, col4 = st.columns(2)
         ini_ativo = col3.selectbox(
@@ -3241,6 +3370,8 @@ def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
                 nr_vara                 = %s,
                 nome_juiz               = %s,
                 comarca                 = %s,
+                tipo_acao               = %s,
+                origem_cliente          = %s,
                 quitado_em              = CASE WHEN %s <= 0 THEN COALESCE(quitado_em, %s) END
             WHERE id = %s
             """,
@@ -3265,6 +3396,8 @@ def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
                 nr_vara.strip() or None,
                 nome_juiz.strip() or None,
                 comarca.strip() or None,
+                tipo_acao or None,
+                origem_cliente or None,
                 saldo_devedor,
                 hoje().isoformat(),
                 contrato_id,
@@ -3682,13 +3815,60 @@ def pagina_arquivados() -> None:
     botoes_exportacao(visao, "contratos_arquivados", "Relatório de Contratos Arquivados")
 
 
+def _aba_listas() -> None:
+    """Manutenção das listas de escolha.
+
+    Acrescentar uma opção se faz na própria tela de cadastro, que é onde a
+    necessidade aparece. Aqui fica o resto: conferir a lista inteira e apagar
+    o que entrou errado.
+    """
+    st.markdown(
+        "Opções que aparecem nas listas de **Novo Contrato** e **Editar Contrato**. "
+        "Para criar uma opção nova, use o **➕** na própria tela de cadastro."
+    )
+
+    for categoria, (rotulo, _) in OPCOES_INICIAIS.items():
+        st.subheader(rotulo)
+        valores = opcoes_de(categoria)
+        if not valores:
+            st.info("Lista vazia. Adicione a primeira opção pelo cadastro de contrato.")
+            continue
+
+        st.write(" · ".join(f"**{v}**" for v in valores))
+
+        col_sel, col_bt = st.columns([3, 1])
+        alvo = col_sel.selectbox(
+            "Apagar opção", valores, key=f"del_sel_{categoria}", label_visibility="collapsed"
+        )
+        with col_bt:
+            if st.button("🗑️ Apagar", key=f"del_bt_{categoria}", use_container_width=True):
+                usos = escalar(
+                    f"SELECT COUNT(*) FROM contratos WHERE {categoria} = %s", (alvo,), padrao=0
+                )
+                exec_db(
+                    "DELETE FROM opcoes WHERE categoria = %s AND valor = %s", (categoria, alvo)
+                )
+                # Os contratos guardam o texto, não uma referência: apagar a
+                # opção tira ela das próximas escolhas e não mexe no histórico.
+                extra = (
+                    f" {int(usos)} contrato(s) continuam marcados assim."
+                    if int(usos or 0) else ""
+                )
+                flash(f"**{alvo}** saiu da lista.{extra}", "warning")
+                st.rerun()
+        st.divider()
+
+
 # -------------------------------------------------------------------- GESTÃO --
 def pagina_gestao() -> None:
     st.header("Gerenciar")
 
-    aba_excluir, aba_backup, aba_diagnostico = st.tabs(
-        ["🗑️ Excluir Contrato", "💾 Backup", "🔧 Diagnóstico"]
+    aba_listas, aba_excluir, aba_backup, aba_diagnostico = st.tabs(
+        ["📝 Listas", "🗑️ Excluir Contrato", "💾 Backup", "🔧 Diagnóstico"]
     )
+
+    with aba_listas:
+        _aba_listas()
 
     with aba_excluir:
         df = select_db("SELECT id, cliente, saldo_devedor FROM contratos ORDER BY cliente ASC")

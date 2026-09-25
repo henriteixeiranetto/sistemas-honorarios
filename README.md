@@ -15,7 +15,26 @@ Controle de contratos, parcelas e recebimentos de honorários advocatícios.
 | 💰 Pagamentos | Baixa de parcelas, sucumbência e emissão de recibo (WhatsApp ou PDF) |
 | 📂 Meus Contratos | Edição, cronogramas da redução e do êxito, estorno de baixas e arquivamento |
 | 📁 Arquivados | Contratos encerrados pelo escritório |
-| ⚙️ Gestão | Exclusão, backup em Excel e diagnóstico da conexão |
+| ⚙️ Gestão | Listas de escolha, exclusão, backup em Excel e diagnóstico da conexão |
+
+---
+
+## Listas de escolha
+
+**Tipo da Ação** e **Origem do Cliente** são listas que o escritório mantém
+sozinho: as opções ficam na tabela `opcoes`, não numa constante do código.
+
+Para criar uma opção nova, use o **➕** logo abaixo do campo, em Novo Contrato
+ou Editar Contrato — ela já fica escolhida no contrato que está sendo
+preenchido. Para conferir ou apagar, **⚙️ Gestão → 📝 Listas**.
+
+As opções padrão entram **uma única vez**, quando a categoria ainda está
+vazia. O que o escritório apagar não volta no deploy seguinte.
+
+O contrato guarda o **texto** escolhido, não uma referência. Apagar uma opção
+da lista tira ela das próximas escolhas e não mexe nos contratos que já a
+usavam — eles continuam mostrando o que foi escolhido na época, e a opção
+reaparece na lista se aquele contrato for editado.
 
 ---
 

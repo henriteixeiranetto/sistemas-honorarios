@@ -62,7 +62,8 @@ CONTRATOS = pd.DataFrame([
      "nr_processo": "0801234-55.2026.8.17.0001", "nr_vara": "3ª Vara Cível",
      "nome_juiz": "Dra. Helena Vasconcelos", "comarca": "Recife/PE",
      "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
-     "quitado_em": "", "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0},
+     "quitado_em": "", "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
+     "tipo_acao": "Cobertura médica", "origem_cliente": "Indicação"},
     {"id": 11, "cliente": "Marcelo Soares de Albuquerque", "cpf_cnpj": "897.208.790-41",
      "telefone": "", "valor_total": 1234567.89, "saldo_devedor": 1226567.89,
      "data_contrato": _d(-95), "observacoes": "", "tutela": "Pendente",
@@ -74,7 +75,8 @@ CONTRATOS = pd.DataFrame([
      "nr_processo": "0809876-12.2026.8.17.0001", "nr_vara": "1ª Vara da Fazenda",
      "nome_juiz": "", "comarca": "Recife/PE",
      "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
-     "quitado_em": "", "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0},
+     "quitado_em": "", "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
+     "tipo_acao": "Plano individual antigo", "origem_cliente": "Lead"},
     {"id": 14, "cliente": "Construtora Ação Ltda", "cpf_cnpj": "11.222.333/0001-81",
      "telefone": "(81) 3333-4444", "valor_total": 6500.0, "saldo_devedor": 0.0,
      "data_contrato": _d(-320), "observacoes": "Indicação do Dr. Guilherme",
@@ -85,7 +87,8 @@ CONTRATOS = pd.DataFrame([
      "hon_exito_percentual": 0.0, "hon_exito_fixo": 0.0,
      "nr_processo": "", "nr_vara": "", "nome_juiz": "", "comarca": "",
      "exito_pago": 1, "exito_data_pagamento": _d(-30), "exito_valor_recebido": 12000.0,
-     "quitado_em": _d(-30), "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0},
+     "quitado_em": _d(-30), "arquivado_em": None, "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
+     "tipo_acao": "Cobrança / Execução", "origem_cliente": "Parceria"},
 ])
 
 CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
@@ -101,6 +104,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
     "quitado_em": "", "arquivado_em": None,
     "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
+    "tipo_acao": "Falso coletivo", "origem_cliente": "Próprio",
 }])], ignore_index=True)
 
 # Contrato já arquivado, para exercitar a lista de Arquivados e o botão de
@@ -120,6 +124,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
     "quitado_em": _d(-60), "arquivado_em": _d(-58),
     "sucumbencia_recebida": 1, "sucumbencia_data": _d(-55), "sucumbencia_valor_recebido": 1800.0,
+    "tipo_acao": "Direito do consumidor", "origem_cliente": "Referência (advogado)",
 }])], ignore_index=True)
 
 # O caso que o escritório relatou duas vezes: contrato sem honorário inicial,
@@ -139,6 +144,7 @@ CONTRATOS = pd.concat([CONTRATOS, pd.DataFrame([{
     "exito_pago": 0, "exito_data_pagamento": "", "exito_valor_recebido": 0.0,
     "quitado_em": "", "arquivado_em": None,
     "sucumbencia_recebida": 0, "sucumbencia_data": "", "sucumbencia_valor_recebido": 0.0,
+    "tipo_acao": "Coletivo por adesão", "origem_cliente": "Parceria",
 }])], ignore_index=True)
 
 # Redução inteira recebida, mas o êxito por percentual continua em aberto: o
@@ -201,6 +207,23 @@ PARCELAS_EXITO = pd.DataFrame([
      "data_prevista": _d(16), "data_pagamento": "", "pago": 0},
 ])
 
+# As listas que o escritório mantém sozinho. O "Home care" não está entre os
+# padrões de propósito: é uma opção acrescentada por eles, para a prévia
+# mostrar que a lista cresce.
+OPCOES = pd.DataFrame(
+    [{"id": i, "categoria": c, "valor": v} for i, (c, v) in enumerate(
+        [("tipo_acao", nome) for nome in (
+            "Falso coletivo", "Plano individual antigo", "Coletivo por adesão",
+            "Cobertura médica", "Direito do consumidor", "Cobrança / Execução",
+            "Consultoria mensal", "Home care",
+        )]
+        + [("origem_cliente", nome) for nome in (
+            "Parceria", "Indicação", "Referência (advogado)", "Lead", "Próprio",
+        )],
+        start=1,
+    )]
+)
+
 # Espelha o schema real de produção. As datas continuam em três tipos
 # diferentes (date, timestamp e text) — é dessa mistura que vieram os erros
 # de UNION e COALESCE. Dinheiro já está todo em numeric.
@@ -227,6 +250,8 @@ ESTRUTURA = pd.DataFrame(
             ("contratos", "sucumbencia_recebida", "integer", "YES"),
             ("contratos", "sucumbencia_data", "text", "YES"),
             ("contratos", "sucumbencia_valor_recebido", "numeric", "YES"),
+            ("contratos", "tipo_acao", "text", "YES"),
+            ("contratos", "origem_cliente", "text", "YES"),
             ("parcelas", "valor_parcela", "numeric", "NO"),
             ("parcelas", "data_vencimento", "date", "NO"),
             ("parcelas", "data_pagamento", "timestamp without time zone", "YES"),
@@ -239,6 +264,8 @@ ESTRUTURA = pd.DataFrame(
             ("parcelas_exito", "data_prevista", "text", "NO"),
             ("parcelas_exito", "data_pagamento", "text", "YES"),
             ("parcelas_exito", "pago", "integer", "YES"),
+            ("opcoes", "categoria", "text", "NO"),
+            ("opcoes", "valor", "text", "NO"),
         ]
     ]
 )
@@ -387,6 +414,11 @@ def _consulta_falsa(query: str, params=(), cache: bool = True) -> pd.DataFrame:
             return df[df["contrato_id"] == params[0]]
         return df
 
+    if principal == "opcoes":
+        df = OPCOES.copy()
+        if params:
+            df = df[df["categoria"] == params[0]]
+        return df.sort_values("valor")[["valor"]]
     if principal == "parcelas_exito":
         df = _do_contrato(PARCELAS_EXITO.copy())
         if "pago = 0" in q:

@@ -17,6 +17,11 @@ import sys
 
 from carregar import ORIGEM
 
+# O console do Windows usa cp1252 e levanta excecao ao imprimir emoji. Um
+# teste nao pode falhar por causa do terminal.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+
 try:
     import pglast
 except ImportError:
@@ -25,6 +30,11 @@ except ImportError:
     sys.exit(0)
 
 INICIOS = ("select", "insert", "update", "delete", "create", "alter", "with", "drop")
+
+# O comando tem de COMECAR com a palavra-chave seguida de espaco. Sem a
+# fronteira, a docstring "Selectbox da lista..." era lida como um SELECT e o
+# parser reclamava de um SQL que nunca existiu.
+COMANDO = re.compile(r"^(?:" + "|".join(INICIOS) + r")\s", re.IGNORECASE)
 
 
 def sem_comentario(sql: str) -> str:
@@ -37,6 +47,11 @@ def sem_comentario(sql: str) -> str:
     while linhas and (not linhas[0].strip() or linhas[0].lstrip().startswith("--")):
         linhas.pop(0)
     return "\n".join(linhas).strip()
+
+
+def parece_sql(texto: str) -> bool:
+    return bool(COMANDO.match(sem_comentario(texto)))
+
 
 fonte = pathlib.Path(ORIGEM).read_text(encoding="utf-8")
 arvore = ast.parse(fonte)
@@ -54,13 +69,13 @@ comandos: list[tuple[int, str]] = []
 for no in ast.walk(arvore):
     if isinstance(no, ast.Constant) and isinstance(no.value, str) and id(no) not in pedacos:
         texto = no.value.strip()
-        if sem_comentario(texto).lower().startswith(INICIOS) and len(texto) > 15:
+        if parece_sql(texto) and len(texto) > 15:
             comandos.append((no.lineno, texto))
     elif isinstance(no, ast.JoinedStr):
         montado = "".join(
             str(v.value) if isinstance(v, ast.Constant) else "__CAMPO__" for v in no.values
         ).strip()
-        if sem_comentario(montado).lower().startswith(INICIOS):
+        if parece_sql(montado):
             comandos.append((no.lineno, montado))
 
 
