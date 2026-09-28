@@ -621,4 +621,28 @@ r.verdadeiro(
 )
 
 
+r.secao("[22] Editar Contrato precisa ser um formulário")
+# Fora de um st.form, o Streamlit só envia o que foi digitado quando o campo
+# perde o foco — e o clique que tira o foco é o do próprio botão Salvar, que
+# se perde no recarregamento. Quem escrevia uma observação e clicava em salvar
+# via a tela piscar e nada acontecer. Dentro do formulário, texto e clique
+# chegam juntos.
+
+_editar = _fonte[_fonte.index("def _expander_editar") :]
+_editar = _editar[: _editar.index("\ndef ", 1)]
+
+r.verdadeiro("edição usa st.form", "st.form(" in _editar)
+r.verdadeiro("e o botão é o de enviar o formulário", "st.form_submit_button(" in _editar)
+r.verdadeiro(
+    "nenhum botão comum salva a edição",
+    'st.button("💾 Salvar' not in _editar,
+)
+
+# O "➕" das listas é um botão comum — dentro de st.form o Streamlit recusa.
+# Por isso os seletores ficam antes do formulário, e o teste garante a ordem.
+_pos_seletor = _editar.index("seletor_de_lista")
+_pos_form = _editar.index("st.form(")
+r.verdadeiro("seletores com ➕ ficam fora do formulário", _pos_seletor < _pos_form)
+
+
 sys.exit(r.encerrar())

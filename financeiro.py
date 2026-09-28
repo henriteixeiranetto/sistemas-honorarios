@@ -3324,14 +3324,11 @@ def _bloco_arquivamento(contrato_id: int, contrato: Any) -> None:
 def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
     with st.expander("✏️ Editar Contrato", expanded=False):
         st.subheader("Dados Gerais")
-        col1, col2 = st.columns(2)
-        nome = col1.text_input("Nome do Cliente", value=str(contrato["cliente"]), key=f"ed_nome_{contrato_id}")
-        documento = col2.text_input("CPF / CNPJ", value=str(contrato["cpf_cnpj"] or ""), key=f"ed_cpf_{contrato_id}")
-        telefone = col1.text_input("Telefone", value=str(contrato["telefone"] or ""), key=f"ed_tel_{contrato_id}")
-        observacoes = col2.text_area(
-            "Observações", value=str(contrato["observacoes"] or ""), key=f"ed_obs_{contrato_id}"
-        )
 
+        # As listas ficam FORA do formulário: o "➕" é um botão comum, e o
+        # Streamlit não aceita botão que não seja o de enviar dentro de um
+        # st.form. Elas gravam o valor assim que mudam, então o formulário
+        # abaixo lê a escolha certa na hora de salvar.
         col_tipo, col_origem = st.columns(2)
         tipo_acao = seletor_de_lista(
             "tipo_acao", f"ed{contrato_id}", contrato.get("tipo_acao"), coluna=col_tipo
@@ -3340,85 +3337,102 @@ def _expander_editar(contrato_id: int, contrato: Any, tutela: str) -> None:
             "origem_cliente", f"ed{contrato_id}", contrato.get("origem_cliente"), coluna=col_origem
         )
 
-        st.subheader("💰 Honorários Iniciais")
-        col3, col4 = st.columns(2)
-        ini_ativo = col3.selectbox(
-            "Há cobrança inicial?", ["Não", "Sim"],
-            index=0 if str(contrato.get("hon_inicial_ativo") or "Não") == "Não" else 1,
-            key=f"ed_hi_ativo_{contrato_id}",
-        )
-        ini_valor = col4.number_input(
-            "Valor Total dos Honorários Iniciais (R$)", min_value=0.0, step=100.0, format="%.2f",
-            value=float(contrato.get("hon_inicial_valor") or 0), key=f"ed_hi_valor_{contrato_id}",
-        )
-        col5, col6 = st.columns(2)
-        ini_parcelado = col5.selectbox(
-            "Pagamento parcelado?", ["Não", "Sim"],
-            index=0 if str(contrato.get("hon_inicial_parcelado") or "Não") == "Não" else 1,
-            key=f"ed_hi_parc_{contrato_id}",
-        )
-        ini_qtd = int(
-            col6.number_input(
-                "Nº de Parcelas", min_value=1, max_value=60, step=1,
-                value=int(contrato.get("hon_inicial_parcelas") or 1), key=f"ed_hi_qtd_{contrato_id}",
+        # O st.form existe por um motivo concreto: fora dele, o Streamlit só
+        # envia o que foi digitado quando o campo perde o foco — e o clique
+        # que tira o foco é justamente o do botão Salvar, que se perde no
+        # recarregamento. Quem digitava uma observação e clicava em salvar via
+        # a tela piscar e nada acontecer. Dentro do formulário, o texto e o
+        # clique chegam juntos.
+        with st.form(f"ed_form_{contrato_id}"):
+            col1, col2 = st.columns(2)
+            nome = col1.text_input("Nome do Cliente", value=str(contrato["cliente"]), key=f"ed_nome_{contrato_id}")
+            documento = col2.text_input("CPF / CNPJ", value=str(contrato["cpf_cnpj"] or ""), key=f"ed_cpf_{contrato_id}")
+            telefone = col1.text_input("Telefone", value=str(contrato["telefone"] or ""), key=f"ed_tel_{contrato_id}")
+            observacoes = col2.text_area(
+                "Observações", value=str(contrato["observacoes"] or ""), key=f"ed_obs_{contrato_id}"
             )
-        )
-        col7, col8 = st.columns(2)
-        valor_total = col7.number_input(
-            "Valor Total do Contrato (R$)", min_value=0.0, step=100.0, format="%.2f",
-            value=float(contrato["valor_total"]), key=f"ed_vt_{contrato_id}",
-        )
-        saldo_devedor = col8.number_input(
-            "Saldo Devedor Atual (R$)", min_value=0.0, step=100.0, format="%.2f",
-            value=float(contrato["saldo_devedor"]), key=f"ed_sd_{contrato_id}",
-        )
 
-        st.subheader("⚖️ Honorários da Liminar")
-        col9, col11, col12 = st.columns(3)
-        tutela_nova = col9.selectbox(
-            "Status da Tutela", STATUS_TUTELA,
-            index=STATUS_TUTELA.index(tutela) if tutela in STATUS_TUTELA else 0,
-            key=f"ed_tutela_{contrato_id}",
-        )
-        reducao_valor = col11.number_input(
-            "Valor Total da Redução (R$)", min_value=0.0, step=100.0, format="%.2f",
-            value=float(contrato.get("hon_liminar_reducao_vlr") or 0), key=f"ed_red_vlr_{contrato_id}",
-        )
-        reducao_parcelas = int(
-            col12.number_input(
-                "Nº de Parcelas da Redução", min_value=0, max_value=360, step=1,
-                value=int(contrato.get("hon_liminar_reducao_prc") or 0), key=f"ed_red_prc_{contrato_id}",
+            st.subheader("💰 Honorários Iniciais")
+            col3, col4 = st.columns(2)
+            ini_ativo = col3.selectbox(
+                "Há cobrança inicial?", ["Não", "Sim"],
+                index=0 if str(contrato.get("hon_inicial_ativo") or "Não") == "Não" else 1,
+                key=f"ed_hi_ativo_{contrato_id}",
             )
-        )
+            ini_valor = col4.number_input(
+                "Valor Total dos Honorários Iniciais (R$)", min_value=0.0, step=100.0, format="%.2f",
+                value=float(contrato.get("hon_inicial_valor") or 0), key=f"ed_hi_valor_{contrato_id}",
+            )
+            col5, col6 = st.columns(2)
+            ini_parcelado = col5.selectbox(
+                "Pagamento parcelado?", ["Não", "Sim"],
+                index=0 if str(contrato.get("hon_inicial_parcelado") or "Não") == "Não" else 1,
+                key=f"ed_hi_parc_{contrato_id}",
+            )
+            ini_qtd = int(
+                col6.number_input(
+                    "Nº de Parcelas", min_value=1, max_value=60, step=1,
+                    value=int(contrato.get("hon_inicial_parcelas") or 1), key=f"ed_hi_qtd_{contrato_id}",
+                )
+            )
+            col7, col8 = st.columns(2)
+            valor_total = col7.number_input(
+                "Valor Total do Contrato (R$)", min_value=0.0, step=100.0, format="%.2f",
+                value=float(contrato["valor_total"]), key=f"ed_vt_{contrato_id}",
+            )
+            saldo_devedor = col8.number_input(
+                "Saldo Devedor Atual (R$)", min_value=0.0, step=100.0, format="%.2f",
+                value=float(contrato["saldo_devedor"]), key=f"ed_sd_{contrato_id}",
+            )
 
-        st.subheader("🏆 Honorários de Êxito")
-        col13, col14 = st.columns(2)
-        exito_pct = col13.number_input(
-            "Percentual de Êxito (%)", min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
-            value=float(contrato.get("hon_exito_percentual") or 0), key=f"ed_exito_pct_{contrato_id}",
-        )
-        exito_fixo = col14.number_input(
-            "Valor Fixo de Êxito (R$)", min_value=0.0, step=100.0, format="%.2f",
-            value=float(contrato.get("hon_exito_fixo") or 0), key=f"ed_exito_fixo_{contrato_id}",
-        )
+            st.subheader("⚖️ Honorários da Liminar")
+            col9, col11, col12 = st.columns(3)
+            tutela_nova = col9.selectbox(
+                "Status da Tutela", STATUS_TUTELA,
+                index=STATUS_TUTELA.index(tutela) if tutela in STATUS_TUTELA else 0,
+                key=f"ed_tutela_{contrato_id}",
+            )
+            reducao_valor = col11.number_input(
+                "Valor Total da Redução (R$)", min_value=0.0, step=100.0, format="%.2f",
+                value=float(contrato.get("hon_liminar_reducao_vlr") or 0), key=f"ed_red_vlr_{contrato_id}",
+            )
+            reducao_parcelas = int(
+                col12.number_input(
+                    "Nº de Parcelas da Redução", min_value=0, max_value=360, step=1,
+                    value=int(contrato.get("hon_liminar_reducao_prc") or 0), key=f"ed_red_prc_{contrato_id}",
+                )
+            )
 
-        st.subheader("📁 Dados do Processo")
-        col15, col16 = st.columns(2)
-        nr_processo = col15.text_input(
-            "Número do Processo", value=str(contrato.get("nr_processo") or ""), key=f"ed_proc_{contrato_id}"
-        )
-        nr_vara = col16.text_input(
-            "Número da Vara", value=str(contrato.get("nr_vara") or ""), key=f"ed_vara_{contrato_id}"
-        )
-        col17, col18 = st.columns(2)
-        nome_juiz = col17.text_input(
-            "Nome do Juiz", value=str(contrato.get("nome_juiz") or ""), key=f"ed_juiz_{contrato_id}"
-        )
-        comarca = col18.text_input(
-            "Comarca", value=str(contrato.get("comarca") or ""), key=f"ed_com_{contrato_id}"
-        )
+            st.subheader("🏆 Honorários de Êxito")
+            col13, col14 = st.columns(2)
+            exito_pct = col13.number_input(
+                "Percentual de Êxito (%)", min_value=0.0, max_value=100.0, step=0.5, format="%.2f",
+                value=float(contrato.get("hon_exito_percentual") or 0), key=f"ed_exito_pct_{contrato_id}",
+            )
+            exito_fixo = col14.number_input(
+                "Valor Fixo de Êxito (R$)", min_value=0.0, step=100.0, format="%.2f",
+                value=float(contrato.get("hon_exito_fixo") or 0), key=f"ed_exito_fixo_{contrato_id}",
+            )
 
-        if not st.button("💾 Salvar Alterações", type="primary", key=f"ed_btn_{contrato_id}"):
+            st.subheader("📁 Dados do Processo")
+            col15, col16 = st.columns(2)
+            nr_processo = col15.text_input(
+                "Número do Processo", value=str(contrato.get("nr_processo") or ""), key=f"ed_proc_{contrato_id}"
+            )
+            nr_vara = col16.text_input(
+                "Número da Vara", value=str(contrato.get("nr_vara") or ""), key=f"ed_vara_{contrato_id}"
+            )
+            col17, col18 = st.columns(2)
+            nome_juiz = col17.text_input(
+                "Nome do Juiz", value=str(contrato.get("nome_juiz") or ""), key=f"ed_juiz_{contrato_id}"
+            )
+            comarca = col18.text_input(
+                "Comarca", value=str(contrato.get("comarca") or ""), key=f"ed_com_{contrato_id}"
+            )
+
+            enviar = st.form_submit_button("💾 Salvar Alterações", type="primary")
+
+        if not enviar:
             return
 
         if not nome.strip():
