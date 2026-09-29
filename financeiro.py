@@ -42,6 +42,7 @@ import psycopg2
 import psycopg2.extensions
 import psycopg2.pool
 import streamlit as st
+from psycopg2 import sql as psql
 from psycopg2.extras import RealDictCursor, execute_values
 
 # Dependências opcionais: a aplicação continua de pé sem elas, apenas
@@ -746,6 +747,87 @@ INDICES_UNICOS = [
 ]
 
 
+SQL_TABELAS_SEM_RLS = """
+-- Tabelas do schema public ainda sem Row-Level Security.
+--
+-- O Supabase publica toda tabela de `public` na sua API REST. Sem RLS,
+-- qualquer um com o endereço do projeto e a chave pública (que foi feita para
+-- ser pública) lê, altera e apaga tudo. O sistema não usa essa API — conecta
+-- direto no Postgres —, então ligar o RLS fecha a porta sem mudar nada aqui
+-- dentro.
+SELECT c.relname                                   AS tabela,
+       pg_get_userbyid(c.relowner) = current_user  AS sou_dono,
+       c.relforcerowsecurity                       AS forcado,
+       (SELECT r.rolbypassrls FROM pg_roles r
+         WHERE r.rolname = current_user)           AS ignoro_rls
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relkind = 'r'
+  AND NOT c.relrowsecurity
+ORDER BY c.relname
+"""
+
+
+def pode_ativar_rls(sou_dono: Any, forcado: Any, ignoro_rls: Any) -> bool:
+    """Ligar o RLS nesta tabela mantém o acesso do próprio sistema?
+
+    Só o dono pode ligar. E, depois de ligado, sem nenhuma política criada,
+    o RLS nega tudo a todos — exceto a quem o ignora: o dono (a menos que o
+    RLS tenha sido FORÇADO na tabela) e papéis com BYPASSRLS. Errar essa
+    conta deixaria o site aberto, mas vazio: o sistema trancado fora dos
+    próprios dados.
+    """
+    return bool(sou_dono) and (bool(ignoro_rls) or not bool(forcado))
+
+
+def _proteger_tabelas() -> list[str]:
+    """Liga o RLS em toda tabela de `public` que ainda não tem.
+
+    Varre o schema inteiro, e não só as tabelas que este arquivo conhece: o
+    alerta do Supabase olha para todas, e uma tabela criada à mão ou por outro
+    script ficaria aberta do mesmo jeito.
+
+    Cada tabela vai numa transação própria, conferida antes e depois: se a
+    contagem de linhas mudar ao ligar o RLS, é sinal de que o sistema perdeu o
+    acesso — a transação é desfeita e vira aviso em vez de derrubar o site.
+    """
+    avisos: list[str] = []
+    try:
+        with transacao() as cur:
+            cur.execute(SQL_TABELAS_SEM_RLS)
+            pendentes = cur.fetchall()
+    except Exception as erro:
+        return [f"Não foi possível verificar a proteção (RLS) das tabelas: {str(erro).strip()[:160]}"]
+
+    for tabela, sou_dono, forcado, ignoro_rls in pendentes:
+        if not pode_ativar_rls(sou_dono, forcado, ignoro_rls):
+            avisos.append(
+                f"A tabela `{tabela}` continua sem proteção (RLS): ligá-la tiraria o "
+                "acesso do próprio sistema. Ative pelo painel do Supabase."
+            )
+            continue
+
+        identificador = psql.Identifier("public", tabela)
+        try:
+            with transacao() as cur:
+                cur.execute(psql.SQL("SELECT COUNT(*) FROM {}").format(identificador))
+                antes = int(cur.fetchone()[0])
+                cur.execute(
+                    psql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(identificador)
+                )
+                cur.execute(psql.SQL("SELECT COUNT(*) FROM {}").format(identificador))
+                depois = int(cur.fetchone()[0])
+                if depois != antes:
+                    # Levantar aqui desfaz o ALTER: a transação volta inteira.
+                    raise RuntimeError(f"o sistema passaria a ver {depois} de {antes} linhas")
+        except Exception as erro:
+            avisos.append(
+                f"Não foi possível proteger a tabela `{tabela}` (RLS): {str(erro).strip()[:160]}"
+            )
+    return avisos
+
+
 @st.cache_resource(show_spinner=False)
 def inicializar_banco() -> dict[str, Any]:
     """Prepara o schema uma única vez por processo.
@@ -799,6 +881,10 @@ def inicializar_banco() -> dict[str, Any]:
                 f"Não foi possível criar o índice único de `{alvo}` — "
                 f"provavelmente há parcelas duplicadas. Detalhe: {str(erro).strip()[:160]}"
             )
+
+    # Por último, e depois de toda tabela existir: uma tabela criada acima
+    # (como foram `parcelas_exito` e `opcoes`) nasce sem RLS no Supabase.
+    avisos.extend(_proteger_tabelas())
 
     return {"ok": not avisos, "avisos": avisos}
 

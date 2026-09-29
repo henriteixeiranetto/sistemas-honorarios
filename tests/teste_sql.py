@@ -81,6 +81,10 @@ for no in ast.walk(arvore):
 
 def preparar(sql: str) -> str:
     """Troca os placeholders por algo que o parser aceite."""
+    # `{}` é o marcador do psycopg2.sql para NOMES (tabela, coluna), montados
+    # com Identifier para ficarem entre aspas com segurança. É o equivalente
+    # do %s para valores, e vira um nome qualquer para o parser.
+    sql = re.sub(r"\{\w*\}", "tabela_exemplo", sql)
     sql = re.sub(r"VALUES\s+%s", "VALUES (1,2,3,4)", sql, flags=re.IGNORECASE)
     sql = sql.replace("__CAMPO__ __CAMPO__", "coluna_exemplo TEXT").replace("__CAMPO__", "coluna_exemplo")
     contador = [0]

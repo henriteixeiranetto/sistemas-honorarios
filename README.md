@@ -152,6 +152,32 @@ faltarem e os índices. Não é preciso rodar nada à mão.
 
 ---
 
+## Segurança do banco (RLS)
+
+O Supabase publica toda tabela do schema `public` numa API REST. Sem
+**Row-Level Security**, qualquer um com o endereço do projeto e a chave
+pública lê, altera e apaga os dados por essa API — e a chave pública é, por
+projeto, pública.
+
+O sistema **não usa** essa API: conecta direto no Postgres como dono das
+tabelas, e o dono não é barrado pelo RLS. Por isso toda tabela fica com RLS
+ligado e **sem nenhuma política** — o que nega tudo a quem vem pela API e não
+muda nada aqui dentro.
+
+Isso é garantido na inicialização: o sistema varre `public` e liga o RLS em
+qualquer tabela que não tenha, inclusive as criadas à mão. Antes de cada
+uma, confere se continuaria com acesso; depois, compara a contagem de linhas
+e desfaz tudo se ela mudar. O que não puder ser protegido aparece como aviso
+em **⚙️ Gestão → 🔧 Diagnóstico**.
+
+O Supabase pode mostrar o aviso informativo *"RLS enabled, no policy"* nessas
+tabelas. É intencional.
+
+> A chave **`secret`** (antiga `service_role`) ignora o RLS. Ela não é usada
+> em lugar nenhum deste sistema e nunca deve sair do painel do Supabase.
+
+---
+
 ## Como testar
 
 Há três formas, da mais segura para a mais arriscada. **Nenhuma delas é o

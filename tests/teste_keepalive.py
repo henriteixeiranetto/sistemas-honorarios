@@ -30,13 +30,13 @@ r = Resultado("Keep-alive")
 
 r.secao("[1] Identificar o projeto a partir do que já está configurado")
 ka = _recarregar(
-    SUPABASE_USER="postgres.eygwrggknlblfcywfzgx",
+    SUPABASE_USER="postgres.abcdefghijklmnopqrst",
     SUPABASE_HOST="aws-1-sa-east-1.pooler.supabase.com",
 )
-r.checar("usuário do pooler (postgres.<ref>)", ka.identificar_projeto(), "eygwrggknlblfcywfzgx")
+r.checar("usuário do pooler (postgres.<ref>)", ka.identificar_projeto(), "abcdefghijklmnopqrst")
 
-ka = _recarregar(SUPABASE_USER="postgres", SUPABASE_HOST="db.eygwrggknlblfcywfzgx.supabase.co")
-r.checar("host da conexão direta", ka.identificar_projeto(), "eygwrggknlblfcywfzgx")
+ka = _recarregar(SUPABASE_USER="postgres", SUPABASE_HOST="db.abcdefghijklmnopqrst.supabase.co")
+r.checar("host da conexão direta", ka.identificar_projeto(), "abcdefghijklmnopqrst")
 
 ka = _recarregar(SUPABASE_REF="abcdefghijklmnop", SUPABASE_USER="postgres", SUPABASE_HOST="x")
 r.checar("SUPABASE_REF tem prioridade", ka.identificar_projeto(), "abcdefghijklmnop")
@@ -50,7 +50,7 @@ r.checar("sufixo curto não é confundido com ref", ka.identificar_projeto(), No
 
 
 r.secao("[2] O script existe e expõe as duas checagens")
-ka = _recarregar(SUPABASE_USER="postgres.eygwrggknlblfcywfzgx", SUPABASE_HOST="x")
+ka = _recarregar(SUPABASE_USER="postgres.abcdefghijklmnopqrst", SUPABASE_HOST="x")
 for funcao in ("pingar_api", "pingar_banco", "identificar_projeto", "main"):
     r.verdadeiro(f"{funcao}() definida", callable(getattr(ka, funcao, None)))
 

@@ -137,6 +137,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_notificacoes_parcela
     ON notificacoes_enviadas (tipo, contrato_id, nr_parcela, data_referencia)
 """
 
+# Toda tabela em `public` fica exposta na API REST do Supabase se não tiver
+# RLS. Este script conecta direto no Postgres como dono da tabela, e o dono
+# não é barrado pelo RLS — então ligar aqui fecha a API sem mudar nada no
+# funcionamento. Pode rodar sempre: ligar o que já está ligado não faz nada.
+RLS_REGISTRO = "ALTER TABLE notificacoes_enviadas ENABLE ROW LEVEL SECURITY"
+
 # Os ::text existem porque as colunas de data têm tipos diferentes entre as
 # duas tabelas (date em `parcelas`, text em `parcelas_liminar`). Sem o cast, o
 # UNION não casa os tipos.
@@ -386,6 +392,7 @@ def main() -> int:
         with conexao.cursor() as cur:
             cur.execute(DDL_REGISTRO)
             cur.execute(INDICE_REGISTRO)
+            cur.execute(RLS_REGISTRO)
         conexao.commit()
 
         itens = buscar_vencimentos(conexao, referencia.isoformat(), incluir_atrasadas)

@@ -225,4 +225,17 @@ finally:
 r.checar("erro de autenticação devolve False", falhou, False)
 
 
+r.secao("[8] A tabela de avisos nasce protegida (RLS)")
+# O Supabase publica toda tabela de `public` na API REST. Sem RLS, a lista de
+# quem foi cobrado e quando ficaria aberta a quem tivesse o endereço do projeto.
+r.verdadeiro("liga o RLS", "ENABLE ROW LEVEL SECURITY" in nt.RLS_REGISTRO)
+r.verdadeiro("na tabela de avisos", "notificacoes_enviadas" in nt.RLS_REGISTRO)
+
+_codigo = (RAIZ / "notificar.py").read_text(encoding="utf-8")
+r.verdadeiro(
+    "logo depois de criar a tabela",
+    _codigo.index("cur.execute(DDL_REGISTRO)") < _codigo.index("cur.execute(RLS_REGISTRO)"),
+)
+
+
 sys.exit(r.encerrar())
